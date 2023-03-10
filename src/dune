@@ -1,0 +1,15 @@
+(library
+ (name kit)
+ (modules windows status message mode tabs rp kit prompt engine help window)
+ (public_name kit)
+ (libraries ptime logs art fmt astring lwt lwd nottui notty kit.rb kit.rope))
+
+(library
+ (name rope)
+ (modules rope)
+ (public_name kit.rope))
+
+(library
+ (name rb)
+ (modules rb)
+ (public_name kit.rb))

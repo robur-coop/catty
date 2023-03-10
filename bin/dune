@@ -1,0 +1,3 @@
+(executable
+ (name kitty)
+ (libraries duration fmt.tty logs.fmt ptime.clock.os nottui-lwt kit))

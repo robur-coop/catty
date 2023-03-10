@@ -1,0 +1,36 @@
+opam-version: "2.0"
+name:         "kit"
+maintainer:   "Romain Calascibetta <romain.calascibetta@gmail.com>"
+authors:      "Romain Calascibetta <romain.calascibetta@gmail.com>"
+homepage:     "https://git.robur.io/robur/kit"
+bug-reports:  "https://git.robur.io/robur/kit/issues"
+dev-repo:     "git+https://git.robur.io/robur/kit.git"
+doc:          "https://git.robur.io/robur/kit/"
+license:      "MIT"
+synopsis:     "A simple IRC client in OCaml"
+description: """Kit is a simple IRC client in OCaml which can be embed into an unikernel"""
+
+build: [ "dune" "build" "-p" name "-j" jobs ]
+run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
+
+depends: [
+  "ocaml"       {>= "4.07.0"}
+  "dune"        {>= "2.8.0"}
+  "ptime"
+  "logs"
+  "art"
+  "lwt"
+  "lwd"
+  "nottui"
+  "nottui-lwt"
+  "notty"
+  "duration"
+]
+
+pin-depends: [
+  [ "lwd.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
+  [ "nottui.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
+  [ "nottui-unix.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
+  [ "nottui-lwt.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
+  [ "art.dev" "git+https://github.com/dinosaure/art.git#0f1cb7137cfdc094d6071ea5f633ba0c21d47856" ]
+]
