@@ -14,11 +14,10 @@ let split_at ~len:max str =
 
 type t = {w: int; h: int; p: int}
 
-let width_nicknames nicknames =
-  let res = ref 0 in
-  let f (nickname : Art.key) _color () =
-    res := max !res (String.length (nickname :> string)) in
-  Art.iter ~f () nicknames ; !res
+let width_nicknames msgs =
+  let f {Message.nickname; _} acc =
+    max (String.length (nickname :> string)) acc in
+  Rb.iter ~f msgs 0
 
 let render_time ptime =
   let (_y, _m, _d), ((hh, mm, ss), _tz) = Ptime.to_date_time ptime in
@@ -26,11 +25,11 @@ let render_time ptime =
 
 let width_ptime = I.width (render_time Ptime.epoch)
 
-let render_message ~width {Message.nickname; message; time} nicknames =
-  let width_nicknames = width_nicknames nicknames in
+let render_message
+    ~width ~width_nicknames {Message.nickname; message; time} nicknames =
   let width_message = max 1 (width - width_nicknames - 1 - width_ptime - 1) in
   let message = split_at ~len:width_message message in
-  let color = Art.find nicknames nickname in
+  let color = try Art.find nicknames nickname with _exn -> A.white in
   let rest =
     List.map @@ fun msg ->
     I.hcat
@@ -51,10 +50,12 @@ let render {w; h; p} msgs nicknames =
   let idx = ref (Rb.length msgs - 1 - p) in
   let image = ref I.empty in
   let message = ref I.empty in
+  let width_nicknames = width_nicknames msgs in
   while
     !idx >= 0
     &&
-    (message := render_message ~width:w msgs.Rb.%[!idx] nicknames
+    (message :=
+       render_message ~width_nicknames ~width:w msgs.Rb.%[!idx] nicknames
      ; I.height !message + I.height !image <= h)
   do
     (image := I.(!message <-> !image))

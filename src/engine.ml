@@ -13,6 +13,9 @@ type vars = {
   ; quit: unit Lwt.t
 }
 
+type thread =
+  [ `Fiber of (unit, Cri_lwt.error) result Lwt.t | `Multiplex of unit Lwt.t ]
+
 type t = {
     command: string Lwt_stream.t
   ; message: string Lwt_stream.t
@@ -20,10 +23,14 @@ type t = {
   ; sleep: float -> unit Lwt.t
   ; windows: Windows.t
   ; status: Status.t Lwd.var
+  ; ctx: Mimic.ctx
+  ; mutable username: Art.key
+  ; mutable threads: thread list
+  ; mutable switchs: Lwt_switch.t list
 }
 
-let make ~now ~sleep () =
-  let windows = Windows.make ~now in
+let make ~ctx ~now ~sleep username =
+  let windows = Windows.make ~now username in
   let command, pushc = Lwt_stream.create () in
   let message, pushm = Lwt_stream.create () in
   let quit, do_quit = Lwt.task () in
@@ -43,6 +50,10 @@ let make ~now ~sleep () =
     ; sleep
     ; windows
     ; status= result.status
+    ; ctx
+    ; username
+    ; threads= []
+    ; switchs= []
     } )
 
 module Status = struct
@@ -73,7 +84,83 @@ module Status = struct
 end
 
 module Windows = struct
-  let push_on_console t msg = Windows.push_on_console t.windows msg
+  let push_on_console t ?prefix msg =
+    Windows.push_on_console t.windows ?prefix msg
+
+  let push t msg = Windows.push t.windows ~nickname:t.username msg
+end
+
+module Connect = struct
+  let dst :
+      [ `Domain of [ `host ] Domain_name.t * int | `Inet of Ipaddr.t * int ]
+      Mimic.value =
+    Mimic.make ~name:"irc-destination"
+
+  let tls : bool Mimic.value = Mimic.make ~name:"irc-tls"
+  let error_msgf fmt = Fmt.kstr (fun msg -> Error (`Msg msg)) fmt
+
+  let pp ppf = function
+    | `Domain (host, port) -> Fmt.pf ppf "%a:%d" Domain_name.pp host port
+    | `Inet (ipaddr, port) -> Fmt.pf ppf "%a:%d" Ipaddr.pp ipaddr port
+
+  let with_destination_and_parameters ctx dst_v _ps =
+    let tls_v = true in
+    ctx |> Mimic.add dst dst_v |> Mimic.add tls tls_v
+
+  let parse_dst ?port:(default = 6697) str =
+    let[@warning "-8"] (port :: rest) =
+      match List.rev (String.split_on_char ':' str) with
+      | [host] -> [Int.to_string default; host]
+      | _ :: _ as result -> result
+      | [] -> assert false in
+    let host = String.concat ":" (List.rev rest) in
+    match
+      ( Result.bind (Domain_name.of_string host) Domain_name.host
+      , Ipaddr.with_port_of_string ~default (host ^ ":" ^ port)
+      , int_of_string_opt port )
+    with
+    | Ok host, _, Some port -> Ok (`Domain (host, port))
+    | Error _, Ok (ipaddr, port), _ -> Ok (`Inet (ipaddr, port))
+    | _ -> error_msgf "Invalid destination: %S" str
+
+  let parse_parameter = function
+    | "+tls" -> Ok (`TLS true)
+    | "-tls" -> Ok (`TLS false)
+    | parameter -> (
+      match String.split_on_char ':' parameter with
+      | "password" :: value -> Ok (`Password (String.concat ":" value))
+      | _ -> error_msgf "Invalid parameter: %S" parameter)
+
+  let parse parameters =
+    match parameters with
+    | [host] -> Result.map (fun dst -> dst, []) (parse_dst host)
+    | host :: parameters ->
+      let ( let* ) x f = Result.bind x f in
+      let* dst = parse_dst host in
+      let parameters = List.map parse_parameter parameters in
+      let parameters, _ =
+        List.partition_map
+          (function
+            | Ok v -> Either.Left v
+            | Error (`Msg err) ->
+              Log.warn (fun m -> m "%s" err)
+              ; Either.Right ())
+          parameters in
+      Ok (dst, parameters)
+    | [] -> error_msgf "The connect command requires a destination"
+
+  let multiplex t ~close recv =
+    `Multiplex
+      (let rec loop () =
+         recv () >>= function
+         | Some (prefix, msg) ->
+           let prefix =
+             Option.map (Fmt.to_to_string Cri.Protocol.pp_prefix) prefix in
+           Windows.push_on_console t ?prefix
+             (Fmt.str "%a" Cri.Protocol.pp_message msg)
+           >>= loop
+         | None -> close () ; Lwt.return_unit in
+       loop ())
 end
 
 module Command = struct
@@ -83,14 +170,27 @@ module Command = struct
     | ["quit"] | ["q"] ->
       Lwt.wakeup_later (snd t.do_quit) ()
       ; Lwt.return_unit
-    | ["connect"] ->
-      let stop, do_stop = Lwt.task () in
-      Lwt.async (fun () -> Status.loading ~stop ~text:"loading..." t)
-      ; let* () = t.sleep 5.0 in
-        (* TODO(dinosaure): blocking connect! *)
-        Lwt.wakeup_later do_stop ()
-        ; Lwd.set t.status (`Done "Connected!")
-        ; process t
+    | "connect" :: parameters ->
+      (match Connect.parse parameters with
+      | Ok (dst, ps) ->
+        let timeout () = t.sleep 1. in
+        let stop = Lwt_switch.create () in
+        let th_loading, wk = Lwt.task () in
+        Lwt.async (fun () ->
+            Status.loading ~stop:th_loading ~text:"Connecting..." t)
+        ; let th, recv, _send, close =
+            Cri_lwt.run ~stop ~timeout
+              (Connect.with_destination_and_parameters t.ctx dst ps) in
+          Lwt.wakeup_later wk ()
+          ; Lwd.set t.status (`Done "Connected!")
+          ; t.threads <-
+              Connect.multiplex t ~close recv :: (th :> thread) :: t.threads
+          ; t.switchs <- stop :: t.switchs
+          ; Lwt.return_unit
+      | Error (`Msg err) ->
+        Lwd.set t.status (`Error err)
+        ; Lwt.return_unit)
+      >>= fun () -> process t
     | ["help"] ->
       let* () = Lwt_list.iter_s (Windows.push_on_console t) Help.text in
       process t
@@ -109,7 +209,21 @@ module Message = struct
       Lwt.return (`Message msg) in
     Lwt.choose [quit; msg] >>= function
     | `Quit -> Lwt.return_unit
-    | `Message _msg -> process t
+    | `Message msg ->
+      let* () = Windows.push t msg in
+      process t
 end
 
-let process t = Lwt.join [Command.process t; Message.process t]
+let process t =
+  Lwt.join [Command.process t; Message.process t] >>= fun () ->
+  Lwt_list.iter_p Lwt_switch.turn_off t.switchs >>= fun () ->
+  t.threads
+  |> Lwt_list.iter_s @@ function
+     | `Multiplex th -> th
+     | `Fiber th -> (
+       th >>= function
+       | Ok () -> Lwt.return_unit
+       | Error err ->
+         Log.err (fun m ->
+             m "Got an error at an IRC finalizer: %a" Cri_lwt.pp_error err)
+         ; Lwt.return_unit)

@@ -25,6 +25,10 @@ depends: [
   "nottui-lwt"
   "notty"
   "duration"
+  "tls"
+  "mirage-crypto-rng-lwt"
+  "hxd"
+  "ca-certs"
 ]
 
 pin-depends: [
