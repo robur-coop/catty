@@ -1,8 +1,8 @@
 let rope_to_string rope =
   let len = Rope.String.length rope in
   let buf = Buffer.create len in
-  Rope.String.iter_range (Buffer.add_char buf) rope 0 len
-  ; Buffer.contents buf
+  Rope.String.iter_range (Buffer.add_char buf) rope 0 len;
+  Buffer.contents buf
 
 let test01 =
   Alcotest.test_case "test01" `Quick @@ fun () ->
@@ -35,4 +35,4 @@ let test02 =
     Rope.String.(rope_to_string (Cursor.to_rope cursor))
     "a"
 
-let () = Alcotest.run "rope" ["simple", [test01; test02]]
+let () = Alcotest.run "rope" [ ("simple", [ test01; test02 ]) ]

@@ -41,6 +41,7 @@ module type ROPE = sig
   module Cursor : sig
     type cursor
 
+    val empty : cursor
     val create : t -> int -> cursor
     val position : cursor -> int
     val to_rope : cursor -> t
@@ -57,7 +58,8 @@ module type ROPE = sig
 end
 
 module type CONTROL = sig
-  val small_length : int val maximal_height : int
+  val small_length : int
+  val maximal_height : int
 end
 
 module Make (S : STRING) (C : CONTROL) = struct
@@ -83,56 +85,62 @@ module Make (S : STRING) (C : CONTROL) = struct
     | Str (_, _, 0), t | t, Str (_, _, 0) -> t
     | Str (s1, ofs1, len1), Str (s2, ofs2, len2)
       when len1 <= C.small_length && len2 <= C.small_length ->
-      Str (S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2), 0, len1 + len2)
+        Str (S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2), 0, len1 + len2)
     | App (t1, Str (s1, ofs1, len1), _, _), Str (s2, ofs2, len2)
       when len1 <= C.small_length && len2 <= C.small_length ->
-      App
-        ( t1
-        , Str
-            (S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2), 0, len1 + len2)
-        , length t1 + len1 + len2
-        , 1 + height t1 )
+        App
+          ( t1
+          , Str
+              ( S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2)
+              , 0
+              , len1 + len2 )
+          , length t1 + len1 + len2
+          , 1 + height t1 )
     | Str (s1, ofs1, len1), App (Str (s2, ofs2, len2), t2, _, _)
       when len1 <= C.small_length && len2 <= C.small_length ->
-      App
-        ( Str
-            (S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2), 0, len1 + len2)
-        , t2
-        , len1 + len2 + length t2
-        , 1 + height t2 )
+        App
+          ( Str
+              ( S.append (S.sub s1 ofs1 len1) (S.sub s2 ofs2 len2)
+              , 0
+              , len1 + len2 )
+          , t2
+          , len1 + len2 + length t2
+          , 1 + height t2 )
     | t1, t2 ->
-      App (t1, t2, length t1 + length t2, 1 + max (height t1) (height t2))
+        App (t1, t2, length t1 + length t2, 1 + max (height t1) (height t2))
 
   let append t1 t2 = app (t1, t2)
   let ( ++ ) = append
 
   let _balance t =
     let rec to_list ((n, l) as acc) = function
-      | Str _ as x -> n + 1, x :: l
-      | App (t1, t2, _, _) -> to_list (to_list acc t2) t1 in
+      | Str _ as x -> (n + 1, x :: l)
+      | App (t1, t2, _, _) -> to_list (to_list acc t2) t1
+    in
     let rec build n l =
-      assert (n >= 1)
-      ; if n = 1 then match l with [] -> assert false | x :: r -> x, r
-        else
-          let n' = n / 2 in
-          let t1, l = build n' l in
-          let t2, l = build (n - n') l in
-          mk_app t1 t2, l in
+      assert (n >= 1);
+      if n = 1 then match l with [] -> assert false | x :: r -> (x, r)
+      else
+        let n' = n / 2 in
+        let t1, l = build n' l in
+        let t2, l = build (n - n') l in
+        (mk_app t1 t2, l)
+    in
     let n, l = to_list (0, []) t in
     let t, l = build n l in
-    assert (l = [])
-    ; t
+    assert (l = []);
+    t
 
   let rec unsafe_get t i =
     match t with
     | Str (s, ofs, _) -> S.get s (ofs + i)
     | App (t1, t2, _, _) ->
-      let n1 = length t1 in
-      if i < n1 then unsafe_get t1 i else unsafe_get t2 (i - n1)
+        let n1 = length t1 in
+        if i < n1 then unsafe_get t1 i else unsafe_get t2 (i - n1)
 
   let get t i =
-    if i < 0 || i >= length t then raise Out_of_bounds
-    ; unsafe_get t i
+    if i < 0 || i >= length t then raise Out_of_bounds;
+    unsafe_get t i
 
   let is_empty t = length t = 0
 
@@ -143,72 +151,75 @@ module Make (S : STRING) (C : CONTROL) = struct
       match t with
       | Str (s, ofs, _) -> Str (s, ofs + start, stop - start)
       | App (t1, t2, _, _) ->
-        let n1 = length t1 in
-        if stop <= n1 then mksub start stop t1
-        else if start >= n1 then mksub (start - n1) (stop - n1) t2
-        else app (mksub start n1 t1, mksub 0 (stop - n1) t2)
+          let n1 = length t1 in
+          if stop <= n1 then mksub start stop t1
+          else if start >= n1 then mksub (start - n1) (stop - n1) t2
+          else app (mksub start n1 t1, mksub 0 (stop - n1) t2)
 
   let sub t ofs len =
     let stop = ofs + len in
-    if ofs < 0 || len < 0 || stop > length t then raise Out_of_bounds
-    ; if len = 0 then empty else mksub ofs stop t
+    if ofs < 0 || len < 0 || stop > length t then raise Out_of_bounds;
+    if len = 0 then empty else mksub ofs stop t
 
   let rec safe_iter_range f i n = function
     | Str (s, ofs, _) -> S.iter_range f s (ofs + i) n
     | App (t1, t2, _, _) ->
-      let n1 = length t1 in
-      if i + n <= n1 then safe_iter_range f i n t1
-      else if i >= n1 then safe_iter_range f (i - n1) n t2
-      else (
-        safe_iter_range f i n1 t1
-        ; safe_iter_range f (i - n1) (n - n1) t2)
+        let n1 = length t1 in
+        if i + n <= n1 then safe_iter_range f i n t1
+        else if i >= n1 then safe_iter_range f (i - n1) n t2
+        else (
+          safe_iter_range f i n1 t1;
+          safe_iter_range f (i - n1) (n - n1) t2)
 
   let iter_range f t ofs len =
-    if ofs < 0 || len < 0 || ofs + len > length t then raise Out_of_bounds
-    ; safe_iter_range f ofs len t
+    if ofs < 0 || len < 0 || ofs + len > length t then raise Out_of_bounds;
+    safe_iter_range f ofs len t
 
   let rec print fmt = function
     | Str (s, ofs, len) -> S.print fmt (S.sub s ofs len) (* TODO: improve? *)
-    | App (t1, t2, _, _) -> print fmt t1 ; print fmt t2
+    | App (t1, t2, _, _) ->
+        print fmt t1;
+        print fmt t2
 
   (* assumption: 0 <= i < len t *)
   let rec set_rec i c = function
     | Str (s, ofs, len) when i = 0 ->
-      app (singleton c, Str (s, ofs + 1, len - 1))
+        app (singleton c, Str (s, ofs + 1, len - 1))
     | Str (s, ofs, len) when i = len - 1 ->
-      app (Str (s, ofs, len - 1), singleton c)
+        app (Str (s, ofs, len - 1), singleton c)
     | Str (s, ofs, len) ->
-      app (Str (s, ofs, i), app (singleton c, Str (s, ofs + i + 1, len - i - 1)))
+        app
+          (Str (s, ofs, i), app (singleton c, Str (s, ofs + i + 1, len - i - 1)))
     | App (t1, t2, _, _) ->
-      let n1 = length t1 in
-      if i < n1 then app (set_rec i c t1, t2)
-      else app (t1, set_rec (i - n1) c t2)
+        let n1 = length t1 in
+        if i < n1 then app (set_rec i c t1, t2)
+        else app (t1, set_rec (i - n1) c t2)
 
   (* set t i c = sub t 0 i ++ singleton c ++ sub t (i+1) (length t-i-1) *)
   let set t i c =
     let n = length t in
-    if i < 0 || i >= n then raise Out_of_bounds
-    ; set_rec i c t
+    if i < 0 || i >= n then raise Out_of_bounds;
+    set_rec i c t
 
   (* assumption: 0 <= i < len t *)
   let rec delete_rec i = function
     | Str (_, _, 1) ->
-      assert (i = 0)
-      ; empty
+        assert (i = 0);
+        empty
     | Str (s, ofs, len) when i = 0 -> Str (s, ofs + 1, len - 1)
     | Str (s, ofs, len) when i = len - 1 -> Str (s, ofs, len - 1)
     | Str (s, ofs, len) ->
-      app (Str (s, ofs, i), Str (s, ofs + i + 1, len - i - 1))
+        app (Str (s, ofs, i), Str (s, ofs + i + 1, len - i - 1))
     | App (t1, t2, _, _) ->
-      let n1 = length t1 in
-      if i < n1 then app (delete_rec i t1, t2)
-      else app (t1, delete_rec (i - n1) t2)
+        let n1 = length t1 in
+        if i < n1 then app (delete_rec i t1, t2)
+        else app (t1, delete_rec (i - n1) t2)
 
   (* delete t i = sub t 0 i ++ sub t (i + 1) (length t - i - 1) *)
   let delete t i =
     let n = length t in
-    if i < 0 || i >= n then raise Out_of_bounds
-    ; delete_rec i t
+    if i < 0 || i >= n then raise Out_of_bounds;
+    delete_rec i t
 
   (* assumption: 0 <= i < len t *)
   let rec insert_rec i r = function
@@ -216,15 +227,15 @@ module Make (S : STRING) (C : CONTROL) = struct
     | Str (_, _, len) as s when i = len -> app (s, r)
     | Str (s, ofs, len) -> Str (s, ofs, i) ++ r ++ Str (s, ofs + i, len - i)
     | App (t1, t2, _, _) ->
-      let n1 = length t1 in
-      if i < n1 then app (insert_rec i r t1, t2)
-      else app (t1, insert_rec (i - n1) r t2)
+        let n1 = length t1 in
+        if i < n1 then app (insert_rec i r t1, t2)
+        else app (t1, insert_rec (i - n1) r t2)
 
   (* insert t i r = sub t 0 i ++ r ++ sub t i (length t - i) *)
   let insert t i r =
     let n = length t in
-    if i < 0 || i > n then raise Out_of_bounds
-    ; insert_rec i r t
+    if i < 0 || i > n then raise Out_of_bounds;
+    insert_rec i r t
 
   let insert_char t i c = insert t i (singleton c)
 
@@ -232,12 +243,12 @@ module Make (S : STRING) (C : CONTROL) = struct
   module Cursor = struct
     type path = Top | Left of path * t | Right of t * path
 
-    type cursor = {
-        rpos: int (* position of the cursor relative to the current leaf *)
-      ; lofs: int (* offset of the current leaf wrt whole rope *)
-      ; leaf: t (* the leaf i.e. Str (s,ofs,len) *)
-      ; path: path (* context = zipper *)
-    }
+    type cursor =
+      { rpos : int (* position of the cursor relative to the current leaf *)
+      ; lofs : int (* offset of the current leaf wrt whole rope *)
+      ; leaf : t (* the leaf i.e. Str (s,ofs,len) *)
+      ; path : path (* context = zipper *)
+      }
     (* INVARIANT: 0 <= rpos <= len
                   rpos = len iff we are located at the end of the whole rope *)
     (* TODO(dinosaure): prove that [leaf] contains only a concrete [Str] value. *)
@@ -255,46 +266,46 @@ module Make (S : STRING) (C : CONTROL) = struct
     let create r i =
       let rec zip lofs p = function
         | Str (_, _, len) as leaf ->
-          assert (lofs <= i && i <= lofs + len)
-          ; {rpos= i - lofs; lofs; leaf; path= p}
+            assert (lofs <= i && i <= lofs + len);
+            { rpos = i - lofs; lofs; leaf; path = p }
         | App (t1, t2, _, _) ->
-          let n1 = length t1 in
-          if i < lofs + n1 then zip lofs (Left (p, t2)) t1
-          else zip (lofs + n1) (Right (t1, p)) t2 in
-      if i < 0 || i > length r then raise Out_of_bounds
-      ; zip 0 Top r
+            let n1 = length t1 in
+            if i < lofs + n1 then zip lofs (Left (p, t2)) t1
+            else zip (lofs + n1) (Right (t1, p)) t2
+      in
+      if i < 0 || i > length r then raise Out_of_bounds;
+      zip 0 Top r
 
     let get c =
       match c.leaf with
       | Str (s, ofs, len) ->
-        let i = c.rpos in
-        if i = len then raise Out_of_bounds
-        ; S.get s (ofs + i)
+          let i = c.rpos in
+          if i = len then raise Out_of_bounds;
+          S.get s (ofs + i)
       | App _ -> assert false
 
     (* TODO: improve using concatenations when lengths <= small_length *)
     let set c x =
       match c.leaf with
       | Str (s, ofs, len) ->
-        let i = c.rpos in
-        if i = len then raise Out_of_bounds
-        ; let leaf = Str (S.singleton x, 0, 1) in
+          let i = c.rpos in
+          if i = len then raise Out_of_bounds;
+          let leaf = Str (S.singleton x, 0, 1) in
           if i = 0 then
-            if len = 1 then {c with leaf}
-            else {c with leaf; path= Left (c.path, Str (s, ofs + 1, len - 1))}
+            if len = 1 then { c with leaf }
+            else
+              { c with leaf; path = Left (c.path, Str (s, ofs + 1, len - 1)) }
           else if i = len - 1 then
-            {
-              lofs= c.lofs + len - 1
-            ; rpos= 0
+            { lofs = c.lofs + len - 1
+            ; rpos = 0
             ; leaf
-            ; path= Right (Str (s, ofs, len - 1), c.path)
+            ; path = Right (Str (s, ofs, len - 1), c.path)
             }
           else
-            {
-              lofs= c.lofs + i
-            ; rpos= 0
+            { lofs = c.lofs + i
+            ; rpos = 0
             ; leaf
-            ; path=
+            ; path =
                 Left
                   ( Right (Str (s, ofs, i), c.path)
                   , Str (s, ofs + i + 1, len - i - 1) )
@@ -311,29 +322,26 @@ module Make (S : STRING) (C : CONTROL) = struct
     let insert c r =
       match c.leaf with
       | Str (s, ofs, len) ->
-        let i = c.rpos in
-        let cr = create r 0 in
-        if i = 0 then
-          {
-            cr with
-            lofs= c.lofs
-          ; path= concat_path cr.path (Left (c.path, c.leaf))
-          }
-        else if i = len then
-          {
-            cr with
-            lofs= c.lofs + len
-          ; path= concat_path cr.path (Right (c.leaf, c.path))
-          }
-        else
-          {
-            cr with
-            lofs= c.lofs + i
-          ; path=
-              concat_path cr.path
-                (Left
-                   (Right (Str (s, ofs, i), c.path), Str (s, ofs + i, len - i)))
-          }
+          let i = c.rpos in
+          let cr = create r 0 in
+          if i = 0 then
+            { cr with
+              lofs = c.lofs
+            ; path = concat_path cr.path (Left (c.path, c.leaf))
+            }
+          else if i = len then
+            { cr with
+              lofs = c.lofs + len
+            ; path = concat_path cr.path (Right (c.leaf, c.path))
+            }
+          else
+            { cr with
+              lofs = c.lofs + i
+            ; path =
+                concat_path cr.path
+                  (Left
+                     (Right (Str (s, ofs, i), c.path), Str (s, ofs + i, len - i)))
+            }
       | App _ -> assert false
 
     let insert_char c x = insert c (of_string (S.singleton x))
@@ -343,59 +351,63 @@ module Make (S : STRING) (C : CONTROL) = struct
     let next_leaf c =
       let lofs = c.lofs + length c.leaf in
       let rec down p = function
-        | Str _ as leaf -> {rpos= 0; lofs; leaf; path= p}
-        | App (t1, t2, _, _) -> down (Left (p, t2)) t1 in
+        | Str _ as leaf -> { rpos = 0; lofs; leaf; path = p }
+        | App (t1, t2, _, _) -> down (Left (p, t2)) t1
+      in
       let rec up t = function
         | Top -> raise Out_of_bounds
         | Right (l, p) -> up (mk_app l t) p
-        | Left (p, r) -> down (Right (t, p)) r in
+        | Left (p, r) -> down (Right (t, p)) r
+      in
       up c.leaf c.path
 
     let rec move_forward_rec c n =
       match c.leaf with
       | Str (_, _, len) ->
-        let rpos' = c.rpos + n in
-        if rpos' < len then {c with rpos= rpos'}
-        else if rpos' = len then
-          try next_leaf c with Out_of_bounds -> {c with rpos= rpos'}
-        else
-          (* rpos' > len *)
-          let c = next_leaf c in
-          move_forward_rec c (rpos' - len)
-        (* TODO: improve? *)
+          let rpos' = c.rpos + n in
+          if rpos' < len then { c with rpos = rpos' }
+          else if rpos' = len then
+            try next_leaf c with Out_of_bounds -> { c with rpos = rpos' }
+          else
+            (* rpos' > len *)
+            let c = next_leaf c in
+            move_forward_rec c (rpos' - len)
+          (* TODO: improve? *)
       | App _ -> assert false
 
     let move_forward c n =
-      if n < 0 then invalid_arg "Rop.move_forward"
-      ; if n = 0 then c else move_forward_rec c n
+      if n < 0 then invalid_arg "Rop.move_forward";
+      if n = 0 then c else move_forward_rec c n
 
     (* moves to the end of previous leaf (on the left) if any,
        raises [Out_of_bounds] otherwise *)
     let prev_leaf c =
       let rec down p = function
         | Str (_, _, len) as leaf ->
-          {rpos= len; lofs= c.lofs - len; leaf; path= p}
-        | App (t1, t2, _, _) -> down (Right (t1, p)) t2 in
+            { rpos = len; lofs = c.lofs - len; leaf; path = p }
+        | App (t1, t2, _, _) -> down (Right (t1, p)) t2
+      in
       let rec up t = function
         | Top -> raise Out_of_bounds
         | Right (l, p) -> down (Left (p, t)) l
-        | Left (p, r) -> up (mk_app t r) p in
+        | Left (p, r) -> up (mk_app t r) p
+      in
       up c.leaf c.path
 
     let rec move_backward_rec c n =
       match c.leaf with
       | Str (_, _, _len) ->
-        let rpos' = c.rpos - n in
-        if rpos' >= 0 then {c with rpos= rpos'}
-        else
-          (* rpos' < 0 *)
-          let c = prev_leaf c in
-          move_backward_rec c (-rpos')
+          let rpos' = c.rpos - n in
+          if rpos' >= 0 then { c with rpos = rpos' }
+          else
+            (* rpos' < 0 *)
+            let c = prev_leaf c in
+            move_backward_rec c (-rpos')
       | App _ -> assert false
 
     let move_backward c n =
-      if n < 0 then invalid_arg "Rop.move_backward"
-      ; if n = 0 then c else move_backward_rec c n
+      if n < 0 then invalid_arg "Rop.move_backward";
+      if n = 0 then c else move_backward_rec c n
 
     let move c n =
       if n = 0 then c
@@ -403,7 +415,7 @@ module Make (S : STRING) (C : CONTROL) = struct
       else move_backward_rec c (-n)
 
     let rec _leftmost lofs p = function
-      | Str _ as leaf -> {rpos= 0; lofs; leaf; path= p}
+      | Str _ as leaf -> { rpos = 0; lofs; leaf; path = p }
       | App (t1, t2, _, _) -> _leftmost lofs (Left (p, t2)) t1
 
     (* XXX(dinosaure): the code does not work when we
@@ -418,31 +430,30 @@ module Make (S : STRING) (C : CONTROL) = struct
     let delete c =
       match c.leaf with
       | Str (s, ofs, len) ->
-        let i = c.rpos in
-        if i = len then raise Out_of_bounds
-        ; if i = 0 then
+          let i = c.rpos in
+          if i = len then raise Out_of_bounds;
+          if i = 0 then
             if len = 1 then
               match c.path with
-              | Top -> {c with leaf= empty}
+              | Top -> { c with leaf = empty }
               | Left (p, t) ->
-                (* leftmost c.lofs p r *)
-                let r = to_rope {c with leaf= t; path= p} in
-                create r c.lofs
+                  (* leftmost c.lofs p r *)
+                  let r = to_rope { c with leaf = t; path = p } in
+                  create r c.lofs
               | Right (t, p) ->
-                (* TODO: improve *)
-                let r = to_rope {c with leaf= t; path= p} in
-                create r c.lofs
-            else {c with leaf= Str (s, ofs + 1, len - 1)}
+                  (* TODO: improve *)
+                  let r = to_rope { c with leaf = t; path = p } in
+                  create r c.lofs
+            else { c with leaf = Str (s, ofs + 1, len - 1) }
           else if i = len - 1 then
-            try next_leaf {c with leaf= Str (s, ofs, len - 1)}
+            try next_leaf { c with leaf = Str (s, ofs, len - 1) }
             with Out_of_bounds (* Top *) ->
-              {c with leaf= Str (s, ofs, len - 1)}
+              { c with leaf = Str (s, ofs, len - 1) }
           else
-            {
-              lofs= c.lofs + i
-            ; rpos= 0
-            ; leaf= Str (s, ofs + i + 1, len - i - 1)
-            ; path= Right (Str (s, ofs, i), c.path)
+            { lofs = c.lofs + i
+            ; rpos = 0
+            ; leaf = Str (s, ofs + i + 1, len - i - 1)
+            ; path = Right (Str (s, ofs, i), c.path)
             }
       | App _ -> assert false
 
@@ -452,7 +463,11 @@ module Make (S : STRING) (C : CONTROL) = struct
       let i = position c in
       let before = sub r 0 i in
       let after = sub r i (length r - i) in
-      print fmt before ; Format.fprintf fmt "|" ; print fmt after
+      print fmt before;
+      Format.fprintf fmt "|";
+      print fmt after
+
+    let empty = { rpos = 0; lofs = 0; leaf = Str (S.empty, 0, 0); path = Top }
   end
 end
 
@@ -476,7 +491,11 @@ module Str = struct
     done
 end
 
-module Control = struct let small_length = 256 let maximal_height = max_int end
+module Control = struct
+  let small_length = 256
+  let maximal_height = max_int
+end
+
 module String = Make (Str) (Control)
 
 (* ropes of any type (using arrays as flat sequences) *)
@@ -494,7 +513,7 @@ module Make_array (X : Print) = struct
 
     let length = Array.length
     let empty = [||]
-    let singleton l = [|l|]
+    let singleton l = [| l |]
     let append = Array.append
     let get = Array.get
     let sub = Array.sub
@@ -507,7 +526,11 @@ module Make_array (X : Print) = struct
     let print fmt a = Array.iter (X.print fmt) a
   end
 
-  module C = struct let small_length = 256 let maximal_height = max_int end
+  module C = struct
+    let small_length = 256
+    let maximal_height = max_int
+  end
+
   include Make (A) (C)
 
   let of_array = of_string

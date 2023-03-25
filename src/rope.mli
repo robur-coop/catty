@@ -98,6 +98,9 @@ module type ROPE = sig
   module Cursor : sig
     type cursor
 
+    val empty : cursor
+    (** [empty] is a cursor for an empty rope. *)
+
     val create : t -> int -> cursor
     (** [create t i] returns a cursor placed before character [i] of rope 
         [t]. Raises [Out_of_bounds] is [i < 0 || i > length t].
@@ -177,7 +180,8 @@ end
 *)
 
 module type CONTROL = sig
-  val small_length : int val maximal_height : int
+  val small_length : int
+  val maximal_height : int
 end
 
 module Make (S : STRING) (C : CONTROL) : sig

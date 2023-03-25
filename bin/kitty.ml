@@ -12,7 +12,7 @@ module TCP = struct
 
   let pp_error ppf = function
     | `Error (err, f, v) ->
-      Fmt.pf ppf "%s(%s) : %s" f v (Unix.error_message err)
+        Fmt.pf ppf "%s(%s) : %s" f v (Unix.error_message err)
     | `Refused -> Fmt.pf ppf "Connection refused"
     | `Timeout -> Fmt.pf ppf "Connection timeout"
 
@@ -22,7 +22,7 @@ module TCP = struct
 
   let pp_sockaddr ppf = function
     | Unix.ADDR_INET (inet_addr, port) ->
-      Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
+        Fmt.pf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
     | Unix.ADDR_UNIX v -> Fmt.pf ppf "<%s>" v
 
   let read fd =
@@ -30,25 +30,27 @@ module TCP = struct
     let process () =
       Lwt_unix.read fd tmp 0 (Bytes.length tmp) >>= function
       | 0 -> Lwt.return_ok `Eof
-      | len -> Lwt.return_ok (`Data (Cstruct.of_bytes ~off:0 ~len tmp)) in
+      | len -> Lwt.return_ok (`Data (Cstruct.of_bytes ~off:0 ~len tmp))
+    in
     Lwt.catch process @@ function
     | Unix.Unix_error (e, f, v) ->
-      Logs.err (fun m ->
-          m "Got an error: %s(%s): %s" f v (Unix.error_message e))
-      ; Lwt.return_error (`Error (e, f, v))
+        Logs.err (fun m ->
+            m "Got an error: %s(%s): %s" f v (Unix.error_message e));
+        Lwt.return_error (`Error (e, f, v))
     | exn -> Lwt.fail exn
 
-  let write fd ({Cstruct.len; _} as cs) =
+  let write fd ({ Cstruct.len; _ } as cs) =
     let rec process buf off max =
       Lwt_unix.write fd buf off max >>= fun len ->
       if max - len = 0 then Lwt.return_ok ()
-      else process buf (off + len) (max - len) in
+      else process buf (off + len) (max - len)
+    in
     let buf = Cstruct.to_bytes cs in
     Lwt.catch (fun () -> process buf 0 len) @@ function
     | Unix.Unix_error (e, f, v) ->
-      Logs.err (fun m ->
-          m "Got an error: %s(%s): %s" f v (Unix.error_message e))
-      ; Lwt.return_error (`Error (e, f, v))
+        Logs.err (fun m ->
+            m "Got an error: %s(%s): %s" f v (Unix.error_message e));
+        Lwt.return_error (`Error (e, f, v))
     | exn -> Lwt.fail exn
 
   let rec writev fd = function
@@ -64,8 +66,8 @@ module TCP = struct
       let fam = Unix.domain_of_sockaddr sockaddr in
       let socket = Lwt_unix.socket fam Unix.SOCK_STREAM 0 in
       Logs.debug (fun m ->
-          m "Start a TCP/IP connection to: %a" pp_sockaddr sockaddr)
-      ; Lwt_unix.connect socket sockaddr >>= fun () -> Lwt.return_ok socket
+          m "Start a TCP/IP connection to: %a" pp_sockaddr sockaddr);
+      Lwt_unix.connect socket sockaddr >>= fun () -> Lwt.return_ok socket
     in
     Lwt.catch process @@ function
     | Unix.Unix_error (e, f, v) -> Lwt.return_error (`Error (e, f, v))
@@ -84,11 +86,11 @@ module TLS = struct
       (TCP.connect sockaddr >|= Result.map_error (fun err -> `Read err))
       (fun flow ->
         Logs.debug (fun m ->
-            m "Start a TLS connection to: %a" TCP.pp_sockaddr sockaddr)
-        ; client_of_flow tls ?host flow >>= fun res ->
-          Logs.debug (fun m ->
-              m "Connection to %a completed!" TCP.pp_sockaddr sockaddr)
-          ; Lwt.return res)
+            m "Start a TLS connection to: %a" TCP.pp_sockaddr sockaddr);
+        client_of_flow tls ?host flow >>= fun res ->
+        Logs.debug (fun m ->
+            m "Connection to %a completed!" TCP.pp_sockaddr sockaddr);
+        Lwt.return res)
 end
 
 let tcp_edn, tcp_protocol = Mimic.register ~name:"tcp/ip" (module TCP)
@@ -98,54 +100,64 @@ let ctx =
   let authenticator =
     match Ca_certs.authenticator () with
     | Ok v -> v
-    | Error (`Msg err) -> failwith err in
+    | Error (`Msg err) -> failwith err
+  in
   let to_sockaddr = function
     | `Domain (host, port) ->
-      Logs.debug (fun m -> m "Resolving %a" Domain_name.pp host)
-      ; let {Unix.h_addr_list; _} =
-          Unix.gethostbyname (Domain_name.to_string host) in
+        Logs.debug (fun m -> m "Resolving %a" Domain_name.pp host);
+        let { Unix.h_addr_list; _ } =
+          Unix.gethostbyname (Domain_name.to_string host)
+        in
         Logs.debug (fun m ->
             m "%a resolved: %s" Domain_name.pp host
-              (Unix.string_of_inet_addr h_addr_list.(0)))
-        ; Some host, Unix.ADDR_INET (h_addr_list.(0), port)
+              (Unix.string_of_inet_addr h_addr_list.(0)));
+        (Some host, Unix.ADDR_INET (h_addr_list.(0), port))
     | `Inet (ipaddr, port) ->
-      None, Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, port) in
+        (None, Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, port))
+  in
 
   let k0 dst with_tls =
     let host, sockaddr = to_sockaddr dst in
     match with_tls with
     | true ->
-      Lwt.return_some (Tls.Config.client ~authenticator (), host, sockaddr)
-    | false -> Lwt.return_none in
+        Lwt.return_some (Tls.Config.client ~authenticator (), host, sockaddr)
+    | false -> Lwt.return_none
+  in
   let k1 dst with_tls =
     let _host, sockaddr = to_sockaddr dst in
     match with_tls with
     | true -> Lwt.return_none
-    | false -> Lwt.return_some sockaddr in
+    | false -> Lwt.return_some sockaddr
+  in
   Mimic.empty
   |> Mimic.fold ~k:k0 tls_edn
-       Mimic.Fun.[req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls]
+       Mimic.Fun.[ req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls ]
   |> Mimic.fold ~k:k1 tcp_edn
-       Mimic.Fun.[req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls]
+       Mimic.Fun.[ req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls ]
 
 let reporter ppf =
   let report src level ~over k msgf =
-    let k _ = over () ; k () in
+    let k _ =
+      over ();
+      k ()
+    in
     let with_metadata header _tags k ppf fmt =
       Format.kfprintf k ppf
         ("%a[%a]: " ^^ fmt ^^ "\n%!")
         Logs_fmt.pp_header (level, header)
         Fmt.(styled `Magenta string)
-        (Logs.Src.name src) in
-    msgf @@ fun ?header ?tags fmt -> with_metadata header tags k ppf fmt in
-  {Logs.report}
+        (Logs.Src.name src)
+    in
+    msgf @@ fun ?header ?tags fmt -> with_metadata header tags k ppf fmt
+  in
+  { Logs.report }
 
 let () =
   let oc = open_out "log.txt" in
-  Fmt_tty.setup_std_outputs ~style_renderer:`Ansi_tty ~utf_8:true ()
-  ; Logs.set_reporter (reporter (Format.formatter_of_out_channel oc))
-  ; Logs.set_level ~all:true (Some Logs.Debug)
-  ; Stdlib.at_exit (fun () -> close_out oc)
+  Fmt_tty.setup_std_outputs ~style_renderer:`Ansi_tty ~utf_8:true ();
+  Logs.set_reporter (reporter (Format.formatter_of_out_channel oc));
+  Logs.set_level ~all:true (Some Logs.Debug);
+  Stdlib.at_exit (fun () -> close_out oc)
 
 let now () = Ptime_clock.now ()
 
@@ -153,8 +165,9 @@ let ui, cursor, quit, engine =
   let ( let* ) x f = Lwd.bind ~f x in
   let cursor = Lwd.var (0, 0) in
   let sleep = Lwt_unix.sleep in
-  let Kit.Engine.{status; window; command; message; quit}, engine =
-    Kit.Engine.make ~ctx ~now ~sleep (Art.key (Unix.getlogin ())) in
+  let Kit.Engine.{ status; window; command; message; quit }, engine =
+    Kit.Engine.make ~ctx ~now ~sleep (Art.key (Unix.getlogin ()))
+  in
   let mode = Lwd.var `Normal in
   let tabs = Lwd.var Kit.Tabs.empty in
 
@@ -162,15 +175,15 @@ let ui, cursor, quit, engine =
     let* prompt = Kit.Prompt.make ~command ~message cursor status mode window in
     let* window = Kit.Window.make mode window in
     let* tabs = Kit.Tabs.make tabs in
-    Lwd.return (Nottui.Ui.vcat [tabs; window; prompt]) in
-  ui, cursor, quit, engine
+    Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
+  in
+  (ui, cursor, quit, engine)
 
 let fiber () =
-  Lwt.join [Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine]
+  Lwt.join [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine ]
 
 let () =
-  Lwt_main.run
-  @@ Lwt.catch fiber
+  Lwt_main.run @@ Lwt.catch fiber
   @@ fun exn ->
-  Logs.err (fun m -> m "Got an exception: %s" (Printexc.to_string exn))
-  ; Lwt.return_unit
+  Logs.err (fun m -> m "Got an exception: %s" (Printexc.to_string exn));
+  Lwt.return_unit
