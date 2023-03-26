@@ -7,18 +7,16 @@ type t =
   ; now : unit -> Ptime.t
   }
 
-let make ~now username =
+let make ~now =
   let window = Rb.make 0x1000 in
   let nicknames = Art.make () in
-  Art.insert nicknames (Art.key "root") Notty.A.white;
-  Art.insert nicknames username Notty.A.white;
   { current = Lwd.var (nicknames, Rb.to_ro window)
   ; current_index = 0
   ; windows = [| (nicknames, window) |]
   ; now
   }
 
-let push_on_console ?(prefix = "root") t message =
+let push_on_console ?(prefix = "kit") t message =
   let nicknames, w = t.windows.(0) in
   Rb.fit_and_push w { time = t.now (); nickname = Art.key prefix; message };
   if snd (Lwd.peek t.current) == Rb.to_ro w then

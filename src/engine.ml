@@ -24,14 +24,18 @@ type t =
   ; windows : Windows.t
   ; status : Status.t Lwd.var
   ; ctx : Mimic.ctx
-  ; mutable username : Art.key
+  ; mutable user : User.t
+  ; mode : Cri.User_mode.t list
+  ; host : [ `raw ] Domain_name.t option
   ; threads : (Uid.t, thread) Hashtbl.t
   ; servers : (Address.t, Server.t) Hashtbl.t
   ; mutable switchs : Lwt_switch.t list
   }
 
-let make ~ctx ~now ~sleep username =
-  let windows = Windows.make ~now username in
+let prefix_of_engine t = Cri.Protocol.prefix ?host:t.host (User.nickname t.user)
+
+let make ~ctx ~now ~sleep ?host ?(mode = []) user =
+  let windows = Windows.make ~now in
   let command, pushc = Lwt_stream.create () in
   let message, pushm = Lwt_stream.create () in
   let quit, do_quit = Lwt.task () in
@@ -51,7 +55,9 @@ let make ~ctx ~now ~sleep username =
     ; windows
     ; status = result.status
     ; ctx
-    ; username
+    ; user
+    ; mode
+    ; host
     ; threads = Hashtbl.create 0x10
     ; servers = Hashtbl.create 0x10
     ; switchs = []
@@ -61,7 +67,9 @@ module Windows = struct
   let push_on_console t ?prefix msg =
     Windows.push_on_console t.windows ?prefix msg
 
-  let push t msg = Windows.push t.windows ~nickname:t.username msg
+  let push t msg =
+    let nickname = Art.key (Cri.Nickname.to_string (User.nickname t.user)) in
+    Windows.push t.windows ~nickname msg
 end
 
 module Connect = struct
@@ -91,8 +99,6 @@ module Connect = struct
     | _ -> error_msgf "Invalid destination: %S" str
 
   let parse_parameter = function
-    | "+tls" -> Ok (`TLS true)
-    | "-tls" -> Ok (`TLS false)
     | parameter -> (
         match String.split_on_char ':' parameter with
         | "password" :: value -> Ok (`Password (String.concat ":" value))
@@ -122,6 +128,10 @@ module Connect = struct
       (let rec loop () =
          recv () >>= function
          | Some (prefix, msg) ->
+             Log.debug (fun m ->
+                 m "%a|%a"
+                   Fmt.(option Cri.Protocol.pp_prefix)
+                   prefix Cri.Protocol.pp_message msg);
              let prefix =
                Option.map (Fmt.to_to_string Cri.Protocol.pp_prefix) prefix
              in
@@ -151,7 +161,7 @@ module Server = struct
         Status.errorf "Internal error while connecting to %a" Address.pp address
         |> Lwd.set t.status
 
-  let connect ~address ~parameters ?tls t =
+  let connect ~address ~parameters t =
     let timeout () = t.sleep 10. in
     let stop = Lwt_switch.create () in
     let th_loading, wk = Lwt.task () in
@@ -163,11 +173,15 @@ module Server = struct
       Lwd.set t.status (`Done "Connected!");
       Lwt.return_unit
     in
-    let `Fiber th, recv, _send, close =
+    let `Fiber th, recv, sender, close =
       Cri_lwt.run ~connected ~stop ~timeout
         (Connect.with_destination_and_parameters t.ctx address parameters)
     in
-    let server = Server.make ?tls address in
+    let server = Server.make ~tls:true address sender in
+    let prefix = prefix_of_engine t in
+    Server.send server ~prefix Cri.Protocol.Nick
+      { Cri.Protocol.nick = User.nickname t.user; hopcount = None };
+    Server.send server ~prefix Cri.Protocol.User (User.user ~mode:t.mode t.user);
     Hashtbl.add t.threads (Server.uid_of_connection server) (`Fiber th);
     Hashtbl.add t.threads
       (Server.uid_of_multiplex server)

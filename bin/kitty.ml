@@ -165,8 +165,13 @@ let ui, cursor, quit, engine =
   let ( let* ) x f = Lwd.bind ~f x in
   let cursor = Lwd.var (0, 0) in
   let sleep = Lwt_unix.sleep in
+  let host = Domain_name.of_string_exn (Unix.gethostname ()) in
+  let user =
+    Kit.User.make ~realname:"Romain Calascibetta"
+      (Cri.Nickname.of_string_exn (Unix.getlogin ()))
+  in
   let Kit.Engine.{ status; window; command; message; quit }, engine =
-    Kit.Engine.make ~ctx ~now ~sleep (Art.key (Unix.getlogin ()))
+    Kit.Engine.make ~ctx ~now ~sleep ~host user
   in
   let mode = Lwd.var `Normal in
   let tabs = Lwd.var Kit.Tabs.empty in

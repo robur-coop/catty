@@ -5,3 +5,4 @@ module Mode = Mode
 module Tabs = Tabs
 module Message = Message
 module Uid = Uid
+module User = User
