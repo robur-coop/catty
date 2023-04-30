@@ -247,8 +247,9 @@ module Command = struct
           Rp.iter_range (Uutf.Buffer.add_utf_8 buf) rope 0 len;
           Buffer.contents buf
         in
-        state.command cmd;
         hook ~mode:(`Command (Rp.Cursor.create Rp.empty 0)) state;
+        Log.debug (fun m -> m "Send a new command: %S" cmd);
+        state.command cmd;
         `Handled
     | _ -> `Unhandled
 end

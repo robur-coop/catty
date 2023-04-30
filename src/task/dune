@@ -1,0 +1,5 @@
+(library
+ (name task)
+ (modules task)
+ (public_name kit.task)
+ (libraries logs lwt cri kit.implicit))

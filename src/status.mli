@@ -8,5 +8,5 @@ val loading :
      sleep:(float -> unit Lwt.t)
   -> stop:unit Lwt.t
   -> text:string
-  -> t Lwd.var
+  -> (t -> unit)
   -> unit Lwt.t

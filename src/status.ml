@@ -42,7 +42,7 @@ let loading =
      ; Uchar.of_int 0x280F (* "⠏" *)
     |]
   in
-  fun ~sleep ~stop ~text status ->
+  fun ~sleep ~stop ~text action ->
     let open Lwt.Infix in
     let open Lwt.Syntax in
     let stop () =
@@ -56,7 +56,7 @@ let loading =
     let rec go idx =
       if idx = Array.length tbl then go 0
       else (
-        Lwd.set status (`Progress (tbl.(idx), text));
+        action (`Progress (tbl.(idx), text));
         Lwt.choose [ continue (); stop () ] >>= function
         | `Continue -> go (succ idx)
         | `Stop -> Lwt.return_unit)

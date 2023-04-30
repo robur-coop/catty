@@ -5,72 +5,43 @@ let src = Logs.Src.create "kit.engine"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-type vars =
-  { status : Status.t Lwd.var
-  ; window : Rb.ro Windows.elt Lwd.var
-  ; command : string -> unit
-  ; message : string -> unit
-  ; quit : unit Lwt.t
-  }
-
-type thread =
-  [ `Fiber of (unit, Cri_lwt.error) result Lwt.t | `Multiplex of unit Lwt.t ]
-
 type t =
   { command : string Lwt_stream.t
   ; message : string Lwt_stream.t
-  ; do_quit : unit Lwt.t * unit Lwt.u
+  ; action : Action.t -> unit
+  ; do_quit : unit -> unit
+  ; fibers : (unit, unit) Fiber.t
   ; sleep : float -> unit Lwt.t
-  ; windows : Windows.t
-  ; status : Status.t Lwd.var
+  ; now : unit -> Ptime.t
   ; ctx : Mimic.ctx
-  ; mutable user : User.t
-  ; mode : Cri.User_mode.t list
-  ; host : [ `raw ] Domain_name.t option
-  ; threads : (Uid.t, thread) Hashtbl.t
-  ; servers : (Address.t, Server.t) Hashtbl.t
-  ; mutable switchs : Lwt_switch.t list
+  ; host : [ `raw ] Domain_name.t
+  ; user : User.t
   }
 
-let prefix_of_engine t = Cri.Protocol.prefix ?host:t.host (User.nickname t.user)
+let prefix_of_engine t =
+  Cri.Protocol.prefix ~host:t.host (List.hd (User.nicknames t.user))
 
-let make ~ctx ~now ~sleep ?host ?(mode = []) user =
-  let windows = Windows.make ~now in
+let make ~ctx ~now ~sleep ~host user =
   let command, pushc = Lwt_stream.create () in
   let message, pushm = Lwt_stream.create () in
+  let action, pusha = Lwt_stream.create () in
   let quit, do_quit = Lwt.task () in
-  let result =
-    { status = Lwd.var `None
-    ; window = windows.Windows.current
-    ; command = (fun str -> pushc (Some str))
-    ; message = (fun str -> pushm (Some str))
-    ; quit
-    }
+  let do_quit () =
+    pusha None;
+    Lwt.wakeup_later do_quit ()
   in
-  ( result
+  ( (quit, (fun str -> pushc (Some str)), (fun str -> pushm (Some str)), action)
   , { command
     ; message
-    ; do_quit = (quit, do_quit)
+    ; action = (fun action -> pusha (Some action))
+    ; do_quit
+    ; fibers = Fiber.Root { quit; servers = [] }
     ; sleep
-    ; windows
-    ; status = result.status
+    ; now
     ; ctx
     ; user
-    ; mode
     ; host
-    ; threads = Hashtbl.create 0x10
-    ; servers = Hashtbl.create 0x10
-    ; switchs = []
     } )
-
-module Windows = struct
-  let push_on_console t ?prefix msg =
-    Windows.push_on_console t.windows ?prefix msg
-
-  let push t msg =
-    let nickname = Art.key (Cri.Nickname.to_string (User.nickname t.user)) in
-    Windows.push t.windows ~nickname msg
-end
 
 module Connect = struct
   let dst : Address.t Mimic.value = Mimic.make ~name:"irc-destination"
@@ -122,129 +93,111 @@ module Connect = struct
         in
         Ok (dst, parameters)
     | [] -> error_msgf "The connect command requires a destination"
-
-  let multiplex t ~close recv =
-    `Multiplex
-      (let rec loop () =
-         recv () >>= function
-         | Some (prefix, msg) ->
-             Log.debug (fun m ->
-                 m "%a|%a"
-                   Fmt.(option Cri.Protocol.pp_prefix)
-                   prefix Cri.Protocol.pp_message msg);
-             let prefix =
-               Option.map (Fmt.to_to_string Cri.Protocol.pp_prefix) prefix
-             in
-             Windows.push_on_console t ?prefix
-               (Fmt.str "%a" Cri.Protocol.pp_message msg)
-             >>= loop
-         | None ->
-             close ();
-             Lwt.return_unit
-       in
-       loop ())
 end
 
 module Server = struct
-  (* TODO(dinosaure): clean [t.threads] when we got an error? *)
-  let handle_error_on_cri_thread ~address t = function
-    | Ok () -> ()
-    | Error
-        (`Write _ | `Cycle | `Not_found | `End_of_input | `Msg _ | `Decoder _)
-      ->
-        Status.errorf "Impossible to connect to %a" Address.pp address
-        |> Lwd.set t.status
-    | Error `Time_out ->
-        Status.errorf "The waiting period has expired for %a" Address.pp address
-        |> Lwd.set t.status
-    | Error `No_enough_space ->
-        Status.errorf "Internal error while connecting to %a" Address.pp address
-        |> Lwd.set t.status
-
   let connect ~address ~parameters t =
-    let timeout () = t.sleep 10. in
+    Log.debug (fun m -> m "Connect to %a." Address.pp address);
+    let timeout () = t.sleep (Duration.of_sec 255 |> Duration.to_f) in
     let stop = Lwt_switch.create () in
     let th_loading, wk = Lwt.task () in
     Lwt.async (fun () ->
         Status.loading ~sleep:t.sleep ~stop:th_loading ~text:"Connecting..."
-          t.status);
+          (fun status -> t.action (Action.set_status status)));
     let connected () =
       Lwt.wakeup_later wk ();
-      Lwd.set t.status (`Done "Connected!");
+      t.action (Action.set_status (`Done "Connected!"));
       Lwt.return_unit
     in
-    let `Fiber th, recv, sender, close =
+    let `Fiber thread, recv, send, _close (* TODO? *) =
       Cri_lwt.run ~connected ~stop ~timeout
         (Connect.with_destination_and_parameters t.ctx address parameters)
     in
-    let server = Server.make ~tls:true address sender in
+    let server = Server.make ~tls:true address send in
     let prefix = prefix_of_engine t in
-    Server.send server ~prefix Cri.Protocol.Nick
-      { Cri.Protocol.nick = User.nickname t.user; hopcount = None };
-    Server.send server ~prefix Cri.Protocol.User (User.user ~mode:t.mode t.user);
-    Hashtbl.add t.threads (Server.uid_of_connection server) (`Fiber th);
-    Hashtbl.add t.threads
-      (Server.uid_of_multiplex server)
-      (Connect.multiplex t ~close recv);
-    Lwt.on_success th (handle_error_on_cri_thread ~address t);
-    t.switchs <- stop :: t.switchs;
-    server
+    let open Lwt.Syntax in
+    let* tasks, msgs =
+      let* ping, msgs0 = Task.Ping.v ~prefix () in
+      let* nick, msgs1 =
+        State.Nickname.v ~prefix ~now:t.now ~action:t.action server
+          (User.nicknames t.user)
+      in
+      let* error, msgs2 = State.Error.v ~now:t.now ~action:t.action server in
+      let* notice, msgs3 = State.Notice.v ~now:t.now ~action:t.action server in
+      Lwt.return
+        ( [ Fiber.Task (Task.v Task.ping ping)
+          ; Fiber.Task (Task.v State.nickname nick)
+          ; Fiber.Task (Task.v State.error error)
+          ; Fiber.Task (Task.v State.notice notice)
+          ]
+        , List.concat [ msgs0; msgs1; msgs2; msgs3 ] )
+    in
+    send.send ~prefix Cri.Protocol.User (User.user t.user);
+    List.iter
+      (fun (Fiber.Message { prefix; message = Cri.Protocol.Message (w, v) }) ->
+        send.Cri_lwt.send ?prefix w v)
+      msgs;
+    Log.debug (fun m -> m "Server %a added!" Server.pp server);
+    Lwt.return
+      { t with
+        fibers =
+          Fiber.add_server t.fibers ~stop ~thread ~recv ~send server tasks
+      }
 
   include Server
 end
 
 module Command = struct
-  let rec process t =
+  let process t =
     let* cmd = Lwt_stream.next t.command in
     match Astring.String.cuts ~empty:false ~sep:" " cmd with
     | [ "quit" ] | [ "q" ] ->
-        Lwt.wakeup_later (snd t.do_quit) ();
-        Lwt.return_unit
-    | "connect" :: parameters ->
-        (match Connect.parse parameters with
-        | Ok (dst, ps) ->
-            let server = Server.connect ~address:dst ~parameters:ps t in
-            Hashtbl.add t.servers (Server.address server) server;
-            Lwt.return_unit
+        Log.debug (fun m -> m "Quit the engine.");
+        t.do_quit ();
+        Lwt.return t
+    | "connect" :: parameters -> (
+        Log.debug (fun m -> m "Got a connect command.");
+        match Connect.parse parameters with
+        | Ok (dst, ps) -> Server.connect ~address:dst ~parameters:ps t
         | Error (`Msg err) ->
-            Lwd.set t.status (`Error err);
-            Lwt.return_unit)
-        >>= fun () -> process t
+            t.action (Action.set_status (`Error err));
+            Lwt.return t)
     | [ "help" ] ->
-        let* () = Lwt_list.iter_s (Windows.push_on_console t) Help.text in
-        process t
+        (* let* () = Lwt_list.iter_s (Windows.push_on_console t) Help.text in *)
+        Lwt.return t
     | _ ->
-        Lwd.set t.status (`Error (Fmt.str "Invalid command: %S" cmd));
-        process t
+        t.action (Action.set_status (Status.errorf "Invalid command: %S" cmd));
+        Lwt.return t
+
+  let run t =
+    let open Lwt.Infix in
+    process t >|= fun t -> `Yield t
 end
 
 module Message = struct
-  let rec process t =
-    let quit =
-      let* () = fst t.do_quit in
-      Lwt.return `Quit
-    in
-    let msg =
-      let* msg = Lwt_stream.next t.message in
-      Lwt.return (`Message msg)
-    in
-    Lwt.choose [ quit; msg ] >>= function
-    | `Quit -> Lwt.return_unit
-    | `Message msg ->
-        let* () = Windows.push t msg in
-        process t
+  let process t = Lwt_stream.next t.message >>= fun _msg -> Lwt.return t
+
+  let run t =
+    let open Lwt.Infix in
+    process t >|= fun t -> `Yield t
 end
 
+module Fiber = struct
+  let run t =
+    Fiber.process t.fibers >>= function
+    | Some fibers -> Lwt.return (`Yield { t with fibers })
+    | None -> Lwt.return `Quit
+end
+
+module Ui = struct end
+
 let process t =
-  Lwt.join [ Command.process t; Message.process t ] >>= fun () ->
-  Lwt_list.iter_p Lwt_switch.turn_off t.switchs >>= fun () ->
-  Hashtbl.fold (fun uid th acc -> (uid, th) :: acc) t.threads []
-  |> Lwt_list.iter_s @@ function
-     | _uid, `Multiplex th -> th
-     | _uid, `Fiber th -> (
-         th >>= function
-         | Ok () -> Lwt.return_unit
-         | Error err ->
-             Log.err (fun m ->
-                 m "Got an error at an IRC finalizer: %a" Cri_lwt.pp_error err);
-             Lwt.return_unit)
+  let rec go t =
+    (* NOTE(dinosaure): must be [Lwt.pick] which cancels threads! *)
+    Lwt.pick [ Command.run t; Message.run t; Fiber.run t ] >>= function
+    | `Yield t -> Lwt.pause () >>= fun () -> go t
+    | `Quit ->
+        Log.debug (fun m -> m "The engine is finished.");
+        Lwt.return_unit
+  in
+  go t

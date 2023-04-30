@@ -67,11 +67,19 @@ module TCP = struct
       let socket = Lwt_unix.socket fam Unix.SOCK_STREAM 0 in
       Logs.debug (fun m ->
           m "Start a TCP/IP connection to: %a" pp_sockaddr sockaddr);
-      Lwt_unix.connect socket sockaddr >>= fun () -> Lwt.return_ok socket
+      Lwt_unix.connect socket sockaddr >>= fun () ->
+      Logs.debug (fun m -> m "Connected! (TCP/IP)");
+      Lwt.return_ok socket
     in
     Lwt.catch process @@ function
-    | Unix.Unix_error (e, f, v) -> Lwt.return_error (`Error (e, f, v))
-    | exn -> raise exn
+    | Unix.Unix_error (e, f, v) ->
+        Logs.err (fun m ->
+            m "Impossible to connect to %a: %s(%s): %s" pp_sockaddr sockaddr f v
+              (Unix.error_message e));
+        Lwt.return_error (`Error (e, f, v))
+    | exn ->
+        Logs.err (fun m -> m "Got an exception: %S" (Printexc.to_string exn));
+        raise exn
 end
 
 module TLS = struct
@@ -91,10 +99,17 @@ module TLS = struct
         Logs.debug (fun m ->
             m "Connection to %a completed!" TCP.pp_sockaddr sockaddr);
         Lwt.return res)
+    >>= function
+    | Ok _ as value -> Lwt.return value
+    | Error err ->
+        Logs.err (fun m ->
+            m "Impossible to connect to %a (TLS): %a" TCP.pp_sockaddr sockaddr
+              pp_write_error err);
+        Lwt.return_error err
 end
 
 let tcp_edn, tcp_protocol = Mimic.register ~name:"tcp/ip" (module TCP)
-let tls_edn, tls_protocol = Mimic.register ~name:"tls" (module TLS)
+let tls_edn, tls_protocol = Mimic.register ~priority:10 ~name:"tls" (module TLS)
 
 let ctx =
   let authenticator =
@@ -117,17 +132,21 @@ let ctx =
   in
 
   let k0 dst with_tls =
-    let host, sockaddr = to_sockaddr dst in
-    match with_tls with
-    | true ->
-        Lwt.return_some (Tls.Config.client ~authenticator (), host, sockaddr)
-    | false -> Lwt.return_none
+    try
+      let host, sockaddr = to_sockaddr dst in
+      match with_tls with
+      | true ->
+          Lwt.return_some (Tls.Config.client ~authenticator (), host, sockaddr)
+      | false -> Lwt.return_none
+    with _ -> Lwt.return_none
   in
   let k1 dst with_tls =
-    let _host, sockaddr = to_sockaddr dst in
-    match with_tls with
-    | true -> Lwt.return_none
-    | false -> Lwt.return_some sockaddr
+    try
+      let _host, sockaddr = to_sockaddr dst in
+      match with_tls with
+      | true -> Lwt.return_none
+      | false -> Lwt.return_some sockaddr
+    with _ -> Lwt.return_none
   in
   Mimic.empty
   |> Mimic.fold ~k:k0 tls_edn
@@ -161,34 +180,76 @@ let () =
 
 let now () = Ptime_clock.now ()
 
-let ui, cursor, quit, engine =
-  let ( let* ) x f = Lwd.bind ~f x in
-  let cursor = Lwd.var (0, 0) in
-  let sleep = Lwt_unix.sleep in
-  let host = Domain_name.of_string_exn (Unix.gethostname ()) in
-  let user =
-    Kit.User.make ~realname:"Romain Calascibetta"
-      (Cri.Nickname.of_string_exn (Unix.getlogin ()))
-  in
-  let Kit.Engine.{ status; window; command; message; quit }, engine =
-    Kit.Engine.make ~ctx ~now ~sleep ~host user
-  in
-  let mode = Lwd.var `Normal in
-  let tabs = Lwd.var Kit.Tabs.empty in
+let fiber host nicknames realname =
+  let ui, cursor, quit, engine, action =
+    let ( let* ) x f = Lwd.bind ~f x in
+    let cursor = Lwd.var (0, 0) in
+    let user = Kit.User.make ~realname nicknames in
+    let (quit, command, message, action), engine =
+      Kit.Engine.make ~ctx ~now ~sleep:Lwt_unix.sleep ~host user
+    in
+    let mode = Lwd.var `Normal in
+    let tabs = Lwd.var Kit.Tabs.empty in
+    let status = Lwd.var `None in
+    let windows = Kit.Windows.make ~now host in
 
-  let ui =
-    let* prompt = Kit.Prompt.make ~command ~message cursor status mode window in
-    let* window = Kit.Window.make mode window in
-    let* tabs = Kit.Tabs.make tabs in
-    Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
+    let rec unroll_action () =
+      let open Lwt.Infix in
+      Lwt_stream.get action >>= function
+      | None -> Lwt.return_unit
+      | Some action -> (
+          match action with
+          | Kit.Action.Set_status v ->
+              Lwd.set status v;
+              unroll_action ()
+          | Kit.Action.New_window _ -> unroll_action ()
+          | Kit.Action.New_message (uid, msg) ->
+              Kit.Windows.push_on windows ~uid msg >>= unroll_action)
+    in
+
+    let ui =
+      let window = Kit.Windows.var windows in
+      let* prompt =
+        Kit.Prompt.make ~command ~message cursor status mode window
+      in
+      let* window = Kit.Window.make mode window in
+      let* tabs = Kit.Tabs.make tabs in
+      Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
+    in
+    (ui, cursor, quit, engine, unroll_action)
   in
-  (ui, cursor, quit, engine)
+  Lwt.join
+    [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine; action () ]
 
-let fiber () =
-  Lwt.join [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine ]
+open Cmdliner
 
-let () =
-  Lwt_main.run @@ Lwt.catch fiber
-  @@ fun exn ->
-  Logs.err (fun m -> m "Got an exception: %s" (Printexc.to_string exn));
-  Lwt.return_unit
+let hostname =
+  let parser str = Domain_name.of_string str in
+  let pp = Domain_name.pp in
+  Arg.conv (parser, pp) ~docv:"<hostname>"
+
+let nickname =
+  let parser str = Cri.Nickname.of_string str in
+  let pp = Cri.Nickname.pp in
+  Arg.conv (parser, pp) ~docv:"<nickname>"
+
+let hostname =
+  let doc = "The hostname of the system." in
+  let default = Domain_name.of_string_exn (Unix.gethostname ()) in
+  Arg.(value & opt hostname default & info [ "h"; "hostname" ] ~doc)
+
+let nicknames =
+  let doc = "The nickname of the user." in
+  let default = [ Cri.Nickname.of_string_exn (Unix.getlogin ()) ] in
+  Arg.(non_empty & opt_all nickname default & info [ "n"; "nickname" ] ~doc)
+
+let realname =
+  let doc = "The realname of the user." in
+  Arg.(required & opt (some string) None & info [ "realname" ] ~doc)
+
+let run hostname nickname realname =
+  Lwt_main.run (fiber hostname nickname realname)
+
+let kitty_info = Cmd.info ~doc:"An IRC client in OCaml" "kitty"
+let term = Term.(const run $ hostname $ nicknames $ realname)
+let () = Cmd.(eval (v kitty_info term)) |> exit

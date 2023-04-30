@@ -5,47 +5,34 @@ let src = Logs.Src.create "kit.window"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
-let split_at ~len:max str =
-  let rec go acc off len =
-    if len <= max then String.sub str off len :: acc
-    else go (String.sub str off max :: acc) (off + max) (len - max)
-  in
-  if max <= 0 then invalid_arg "split_at";
-  go [] 0 (String.length str) |> List.rev
-
 type t = { w : int; h : int; p : int }
 
 let width_nicknames msgs =
-  let f { Message.nickname; _ } acc =
-    max (String.length (nickname :> string)) acc
-  in
+  let f msg acc = max (String.length (Message.nickname msg :> string)) acc in
   Rb.iter ~f msgs 0
 
-let render_time ptime =
-  let (_y, _m, _d), ((hh, mm, ss), _tz) = Ptime.to_date_time ptime in
-  I.strf ~attr:A.(fg lightblack) "%02d:%02d:%02d" hh mm ss
-
-let width_ptime = I.width (render_time Ptime.epoch)
-
-let render_message ~width ~width_nicknames { Message.nickname; message; time }
-    nicknames =
-  let width_message = max 1 (width - width_nicknames - 1 - width_ptime - 1) in
-  let message = split_at ~len:width_message message in
-  let color = try Art.find nicknames nickname with _exn -> A.white in
+let render_message ~width ~width_nicknames msg nicknames =
+  let width_message =
+    max 1 (width - width_nicknames - 1 - Message.width_time - 1)
+  in
+  let message = Message.split_at ~len:width_message msg in
+  let color =
+    try Art.find nicknames (Message.nickname msg) with _exn -> A.white
+  in
   let rest =
     List.map @@ fun msg ->
     I.hcat
-      [ I.void (width_ptime + 1 + width_nicknames) 1
+      [ I.void (Message.width_time + 1 + width_nicknames) 1
       ; I.strf "│"
       ; I.strf "%s" msg
       ]
   in
   I.vcat
     (I.hcat
-       [ render_time time
+       [ Message.render_time (Message.time msg)
        ; I.strf " "
        ; I.hsnap ~align:`Right width_nicknames
-           (I.strf ~attr:A.(fg color) "%s" (nickname :> string))
+           (I.strf ~attr:A.(fg color) "%s" (Message.nickname msg :> string))
        ; I.strf "│"
        ; I.strf "%s" (List.hd message)
        ]
@@ -89,11 +76,11 @@ let make mode w =
   let* document =
     let+ state = Lwd.get state
     and+ mode = Lwd.get mode
-    and+ nicknames, msgs = Lwd.get w in
+    and+ { Windows.nicknames; buffer; _ } = Lwd.get w in
 
     Ui.keyboard_area
-      (handler ~hook state mode msgs)
-      (render state msgs nicknames)
+      (handler ~hook state mode buffer)
+      (render state buffer nicknames)
   in
 
   let update_size ~w ~h =
