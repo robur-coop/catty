@@ -12,6 +12,7 @@ module type S = sig
     t -> ?prefix:Cri.Protocol.prefix -> Cri.Protocol.message -> t action Lwt.t
 
   val stop : t -> msg list Lwt.t
+  val name : string
 end
 
 module Implicit = Implicit.Make (struct
@@ -52,6 +53,7 @@ module Ping = struct
 
   let stop _ = Lwt.return []
   let v ?prefix () = Lwt.return (prefix, [])
+  let name = "ping"
 end
 
 type 'a t = ('a * msg list) Lwt.t

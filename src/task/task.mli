@@ -12,6 +12,7 @@ module type S = sig
     t -> ?prefix:Cri.Protocol.prefix -> Cri.Protocol.message -> t action Lwt.t
 
   val stop : t -> msg list Lwt.t
+  val name : string
 end
 
 type state

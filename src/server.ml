@@ -11,6 +11,7 @@ let make ?name address =
   { address; name }
 
 let address { address; _ } = address
+let name { name; _ } = name
 let compare a b = String.compare a.name b.name
 let equal a b = compare a b = 0
 

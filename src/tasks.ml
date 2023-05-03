@@ -5,6 +5,8 @@ let src = Logs.Src.create "kit.tasks"
 module Log = (val Logs.src_log src : Logs.LOG)
 
 module Nickname = struct
+  let name = "nickname"
+
   type t =
     { candidates : Cri.Nickname.t list
     ; prefix : Cri.Protocol.prefix option
@@ -73,6 +75,8 @@ module Nickname = struct
 end
 
 module Error = struct
+  let name = "error"
+
   type t =
     { now : unit -> Ptime.t; action : Action.t -> unit; server : Server.t }
 
@@ -91,6 +95,7 @@ module Error = struct
 end
 
 module Notice = struct
+  let name = "notice"
   let src = Logs.Src.create "kit.notice"
 
   module Log = (val Logs.src_log src : Logs.LOG)
@@ -146,6 +151,14 @@ let notice ~now ~action server =
   Lwt.return (Task.v notice_witness state, msgs)
 
 let current_nickname tasks =
+  Log.debug (fun m ->
+      m "tasks: %a"
+        Fmt.(list string)
+        (List.map
+           (fun task ->
+             let (Task.Value (_, (module State), _)) = Task.prj task in
+             State.name)
+           tasks));
   List.map (Task.prove nickname_witness) tasks
   |> List.find_opt Option.is_some
   |> Option.join

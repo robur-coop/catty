@@ -14,6 +14,7 @@ type t =
   ; host : [ `raw ] Domain_name.t
   ; user : User.t
   ; windows : (Uid.t, string) Hashtbl.t
+  ; recvs : (Cri_lwt.recv * Server.t) list
   }
 
 let prefix_of_engine t =
@@ -40,6 +41,7 @@ let make ~ctx ~now ~sleep ~host user =
     ; user
     ; host
     ; windows = Hashtbl.create 0x10
+    ; recvs = []
     } )
 
 module Connect = struct
@@ -124,8 +126,8 @@ module Server = struct
     Log.debug (fun m -> m "Server %a added!" Server.pp server);
     Lwt.return
       { t with
-        fibers =
-          Fiber.add_server t.fibers ~stop ~thread ~recv ~send server tasks
+        recvs = (recv, server) :: t.recvs
+      ; fibers = Fiber.add_server t.fibers ~stop ~thread ~send server tasks
       }
 
   include Server
@@ -136,19 +138,23 @@ module Command = struct
     let servers = Fiber.servers t.fibers in
     match (Uid.to_int uid, Astring.String.cuts ~empty:false ~sep:" " cmd) with
     | _, [ "quit" ] | _, [ "q" ] ->
-        Log.debug (fun m -> m "Quit the engine.");
+        let open Lwt.Infix in
         t.do_quit ();
-        Lwt.return t
+        Fiber.stop t.fibers >>= fun () ->
+        Log.debug (fun m -> m "All servers are stopped");
+        Lwt.return_none
     | _, "connect" :: parameters -> (
         Log.debug (fun m -> m "Got a connect command.");
         match Connect.parse parameters with
-        | Ok (dst, ps) -> Server.connect ~address:dst ~parameters:ps t
+        | Ok (dst, ps) ->
+            let open Lwt.Infix in
+            Server.connect ~address:dst ~parameters:ps t >|= Option.some
         | Error (`Msg err) ->
             t.action (Action.set_status (`Error err));
-            Lwt.return t)
+            Lwt.return_some t)
     | _, [ "help" ] ->
         (* let* () = list.iter_s (Windows.push_on_console t) Help.text in *)
-        Lwt.return t
+        Lwt.return_some t
     | _, [ "whoami"; server ] -> (
         Log.debug (fun m -> m "whoami on %S" server);
         match Server.Map.find_opt server servers with
@@ -159,32 +165,38 @@ module Command = struct
               (Action.new_message ~uid:Uid.console
                  (Message.msgf ~now:t.now "Your nickname on %a is %a" Server.pp
                     server Cri.Nickname.pp nickname));
-            Lwt.return t
+            Lwt.return_some t
         | None ->
             t.action
               (Action.set_status
                  (Status.errorf "Server %S does not exist" server));
-            Lwt.return t)
+            Lwt.return_some t)
     | _, [ "nickname"; _nickname ] -> assert false
     | _, [ "server"; "list" ] when Server.Map.cardinal servers = 0 ->
         t.action
           (Action.new_message ~uid:Uid.console
              (Message.msgf ~now:t.now "You are not connected to any servers"));
-        Lwt.return t
+        Lwt.return_some t
     | _, [ "server"; "list" ] ->
         t.action
           (Action.new_message ~uid:Uid.console
              (Message.msgf ~now:t.now "%a"
                 Fmt.(list ~sep:(const string "\n") (using fst string))
                 (Server.Map.bindings servers)));
-        Lwt.return t
+        Lwt.return_some t
     | 0, [ "join"; _channel ] when Server.Map.cardinal servers = 1 ->
         assert false
     | 0, [ "join"; _channel ] -> assert false
     | _, [ "join"; _channel; _server ] -> assert false
     | _ ->
         t.action (Action.set_status (Status.errorf "Invalid command: %S" cmd));
-        Lwt.return t
+        Lwt.return_some t
+
+  let process t ~uid cmd =
+    let open Lwt.Infix in
+    process t ~uid cmd >>= function
+    | Some t -> Lwt.return (`Continue t)
+    | None -> Lwt.return `Quit
 end
 
 module Message = struct
@@ -197,23 +209,42 @@ let process t =
     Lwt_stream.next t.message >|= fun (uid, v) -> `Message (uid, v)
   in
   let on_command t =
-    Lwt_stream.next t.command >|= fun (uid, v) -> `Command (uid, v)
+    Lwt_stream.next t.command >>= fun (uid, v) -> Command.process t ~uid v
   in
-  let on_fiber t =
-    Fiber.process t.fibers >>= function
-    | Some fibers -> Lwt.return (`Yield { t with fibers })
-    | None -> Lwt.return `Stop
+  let on_recvs t =
+    let recvs =
+      List.map
+        (fun (recv, server) ->
+          recv () >|= function
+          | Some v -> `Recv (server, v)
+          | None -> `Delete server)
+        t.recvs
+    in
+    match recvs with [] -> Lwt.return `Yield | recvs -> Lwt.pick recvs
   in
 
   let rec go t =
-    Lwt.pick [ on_message t; on_command t; on_fiber t ] >>= function
-    | `Message (uid, v) -> Message.process t ~uid v >>= go
-    | `Command (uid, v) ->
-        Log.debug (fun m -> m "Got a new command!");
-        Command.process t ~uid v >>= go
-    | `Yield t -> Lwt.pause () >>= fun () -> go t
-    | `Stop ->
-        Log.debug (fun m -> m "The engine is finished!");
+    Lwt.pick [ on_message t; on_command t; on_recvs t ] >>= function
+    | `Yield -> Lwt.pause () >>= fun () -> go t
+    | `Quit ->
+        Log.debug (fun m -> m "Quit the engine");
         Lwt.return_unit
+    | `Message (uid, v) -> Message.process t ~uid v >>= go
+    | `Continue t -> Lwt.pause () >>= fun () -> go t
+    | `Recv (on, msg) -> (
+        (* Fiber.process >|= Option'.iter? *)
+        Fiber.process ~on msg t.fibers
+        >>= function
+        | Some fibers -> go { t with fibers }
+        | None -> Lwt.return_unit)
+    | `Delete server ->
+        let { Fiber.servers; quit } = t.fibers in
+        let servers =
+          Fiber.Set.filter_map
+            (fun ({ server = server'; _ } as v) ->
+              if Server.equal server server' then None else Some v)
+            servers
+        in
+        go { t with fibers = { Fiber.servers; quit } }
   in
   go t
