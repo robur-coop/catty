@@ -1,7 +1,7 @@
 type t
 
 val split_at : len:int -> t -> string list
-val make : nickname:Art.key -> time:Ptime.t -> string -> t
+val make : nickname:Art.key -> time:Ptime.t -> string list -> t
 val nickname : t -> Art.key
 val time : t -> Ptime.t
 

@@ -1,4 +1,4 @@
-type t = { nickname : Art.key; message : string; time : Ptime.t }
+type t = { nickname : Art.key; message : string list; time : Ptime.t }
 
 let nickname { nickname; _ } = nickname
 let time { time; _ } = time
@@ -11,7 +11,8 @@ let split_at ~len:max str =
   if max <= 0 then invalid_arg "split_at";
   go [] 0 (String.length str) |> List.rev
 
-let split_at ~len { message; _ } = split_at ~len message
+let split_at ~len { message; _ } =
+  List.map (split_at ~len) message |> List.concat
 
 let render_time ptime =
   let open Notty in
@@ -30,4 +31,8 @@ let msgf ~now ?prefix ?server fmt =
         Fmt.to_to_string Cri.Protocol.pp_prefix prefix |> Art.key
     | None, None -> Art.key "kitty"
   in
-  Fmt.kstr (fun message -> { nickname; time = now (); message }) fmt
+  Fmt.kstr
+    (fun message ->
+      let message = String.split_on_char '\n' message in
+      { nickname; time = now (); message })
+    fmt

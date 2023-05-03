@@ -1,9 +1,10 @@
 (library
  (name kit)
- (modules action state fiber uid user history address server windows status message mode tabs rp kit prompt engine help window)
+ (modules action tasks fiber uid user history address server windows status
+   message mode tabs rp kit prompt engine help window)
  (public_name kit)
- (libraries kit.task duration cri.lwt domain-name ipaddr ptime logs art fmt astring lwt lwd
-   nottui notty kit.rb kit.rope))
+ (libraries kit.task duration cri.lwt domain-name ipaddr ptime logs art fmt
+   astring lwt lwd nottui notty kit.rb kit.rope))
 
 (library
  (name rope)

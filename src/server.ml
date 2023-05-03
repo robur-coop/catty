@@ -1,13 +1,28 @@
-type t = { address : Address.t; tls : bool; uid : Uid.t; sender : Cri_lwt.send }
+type t = { address : Address.t; name : string }
 
-let pp ppf { address; tls; _ } =
-  match tls with
-  | true -> Fmt.pf ppf "tls://%a" Address.pp address
-  | false -> Fmt.pf ppf "tcp://%a" Address.pp address
+let pp ppf { name; _ } = Fmt.string ppf name
 
-let make ?(tls = true) address sender =
-  { address; tls; uid = Uid.gen (); sender }
+let make ?name address =
+  let name =
+    match name with
+    | Some name -> name
+    | None -> Address.to_string ~without_default:true address
+  in
+  { address; name }
 
-let uid { uid; _ } = uid
 let address { address; _ } = address
-let send t ?prefix w v = t.sender.send ?prefix w v
+let compare a b = String.compare a.name b.name
+let equal a b = compare a b = 0
+
+module Set = Set.Make (struct
+  type nonrec t = t
+
+  let compare = compare
+end)
+
+module Map = Map.Make (String)
+
+let to_map servers =
+  Set.fold
+    (fun ({ name; _ } as server) -> Map.add name server)
+    servers Map.empty

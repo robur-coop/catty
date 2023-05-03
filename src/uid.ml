@@ -9,3 +9,4 @@ let gen =
 let pp = Fmt.int
 let console = 0
 let equal = Int.equal
+let to_int x = x

@@ -23,10 +23,14 @@ val prj : state -> value
 val v : 'a witness -> 'a -> state
 val prove : 'a witness -> state -> 'a option
 
-module Ping : sig
-  include S
+(** Syntax *)
 
-  val v : ?prefix:Cri.Protocol.prefix -> unit -> (t * msg list) Lwt.t
-end
+type 'a t = ('a * msg list) Lwt.t
 
-val ping : Ping.t witness
+val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
+val ( and* ) : 'a t -> 'b t -> ('a * 'b) t
+val return : 'a -> 'a t
+
+(** A simple ping state. *)
+
+val ping : ?prefix:Cri.Protocol.prefix -> unit -> state t

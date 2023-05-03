@@ -1,21 +1,19 @@
-open Lwt.Infix
-open Lwt.Syntax
-
 let src = Logs.Src.create "kit.engine"
 
 module Log = (val Logs.src_log src : Logs.LOG)
 
 type t =
-  { command : string Lwt_stream.t
-  ; message : string Lwt_stream.t
+  { command : (Uid.t * string) Lwt_stream.t
+  ; message : (Uid.t * string) Lwt_stream.t
   ; action : Action.t -> unit
   ; do_quit : unit -> unit
-  ; fibers : (unit, unit) Fiber.t
+  ; fibers : Fiber.t
   ; sleep : float -> unit Lwt.t
   ; now : unit -> Ptime.t
   ; ctx : Mimic.ctx
   ; host : [ `raw ] Domain_name.t
   ; user : User.t
+  ; windows : (Uid.t, string) Hashtbl.t
   }
 
 let prefix_of_engine t =
@@ -35,12 +33,13 @@ let make ~ctx ~now ~sleep ~host user =
     ; message
     ; action = (fun action -> pusha (Some action))
     ; do_quit
-    ; fibers = Fiber.Root { quit; servers = [] }
+    ; fibers = { quit; servers = Fiber.Set.empty }
     ; sleep
     ; now
     ; ctx
     ; user
     ; host
+    ; windows = Hashtbl.create 0x10
     } )
 
 module Connect = struct
@@ -52,35 +51,19 @@ module Connect = struct
     let tls_v = true in
     ctx |> Mimic.add dst dst_v |> Mimic.add tls tls_v
 
-  let parse_dst ?port:(default = 6697) str =
-    let[@warning "-8"] (port :: rest) =
-      match List.rev (String.split_on_char ':' str) with
-      | [ host ] -> [ Int.to_string default; host ]
-      | _ :: _ as result -> result
-      | [] -> assert false
-    in
-    let host = String.concat ":" (List.rev rest) in
-    match
-      ( Result.bind (Domain_name.of_string host) Domain_name.host
-      , Ipaddr.with_port_of_string ~default (host ^ ":" ^ port)
-      , int_of_string_opt port )
-    with
-    | Ok host, _, Some port -> Ok (`Domain (host, port))
-    | Error _, Ok (ipaddr, port), _ -> Ok (`Inet (ipaddr, port))
-    | _ -> error_msgf "Invalid destination: %S" str
-
   let parse_parameter = function
     | parameter -> (
         match String.split_on_char ':' parameter with
         | "password" :: value -> Ok (`Password (String.concat ":" value))
+        | "name" :: value -> Ok (`Name (String.concat ":" value))
         | _ -> error_msgf "Invalid parameter: %S" parameter)
 
   let parse parameters =
     match parameters with
-    | [ host ] -> Result.map (fun dst -> (dst, [])) (parse_dst host)
+    | [ host ] -> Result.map (fun dst -> (dst, [])) (Address.of_string host)
     | host :: parameters ->
         let ( let* ) x f = Result.bind x f in
-        let* dst = parse_dst host in
+        let* dst = Address.of_string host in
         let parameters = List.map parse_parameter parameters in
         let parameters, _ =
           List.partition_map
@@ -113,30 +96,31 @@ module Server = struct
       Cri_lwt.run ~connected ~stop ~timeout
         (Connect.with_destination_and_parameters t.ctx address parameters)
     in
-    let server = Server.make ~tls:true address send in
+    let server =
+      let name =
+        List.filter_map
+          (function `Name str -> Some str | _ -> None)
+          parameters
+        |> function
+        | [] -> None
+        | name :: _ -> Some name
+      in
+      Server.make ?name address
+    in
     let prefix = prefix_of_engine t in
     let open Lwt.Syntax in
     let* tasks, msgs =
-      let* ping, msgs0 = Task.Ping.v ~prefix () in
-      let* nick, msgs1 =
-        State.Nickname.v ~prefix ~now:t.now ~action:t.action server
+      let open Task in
+      let* ping = Task.ping ~prefix ()
+      and* nickname =
+        Tasks.nickname ~prefix ~now:t.now ~action:t.action server
           (User.nicknames t.user)
-      in
-      let* error, msgs2 = State.Error.v ~now:t.now ~action:t.action server in
-      let* notice, msgs3 = State.Notice.v ~now:t.now ~action:t.action server in
-      Lwt.return
-        ( [ Fiber.Task (Task.v Task.ping ping)
-          ; Fiber.Task (Task.v State.nickname nick)
-          ; Fiber.Task (Task.v State.error error)
-          ; Fiber.Task (Task.v State.notice notice)
-          ]
-        , List.concat [ msgs0; msgs1; msgs2; msgs3 ] )
+      and* error = Tasks.error ~now:t.now ~action:t.action server
+      and* notice = Tasks.notice ~now:t.now ~action:t.action server in
+      return [ ping; nickname; error; notice ]
     in
     send.send ~prefix Cri.Protocol.User (User.user t.user);
-    List.iter
-      (fun (Fiber.Message { prefix; message = Cri.Protocol.Message (w, v) }) ->
-        send.Cri_lwt.send ?prefix w v)
-      msgs;
+    Fiber.send_msgs send msgs;
     Log.debug (fun m -> m "Server %a added!" Server.pp server);
     Lwt.return
       { t with
@@ -148,56 +132,88 @@ module Server = struct
 end
 
 module Command = struct
-  let process t =
-    let* cmd = Lwt_stream.next t.command in
-    match Astring.String.cuts ~empty:false ~sep:" " cmd with
-    | [ "quit" ] | [ "q" ] ->
+  let process t ~uid cmd =
+    let servers = Fiber.servers t.fibers in
+    match (Uid.to_int uid, Astring.String.cuts ~empty:false ~sep:" " cmd) with
+    | _, [ "quit" ] | _, [ "q" ] ->
         Log.debug (fun m -> m "Quit the engine.");
         t.do_quit ();
         Lwt.return t
-    | "connect" :: parameters -> (
+    | _, "connect" :: parameters -> (
         Log.debug (fun m -> m "Got a connect command.");
         match Connect.parse parameters with
         | Ok (dst, ps) -> Server.connect ~address:dst ~parameters:ps t
         | Error (`Msg err) ->
             t.action (Action.set_status (`Error err));
             Lwt.return t)
-    | [ "help" ] ->
-        (* let* () = Lwt_list.iter_s (Windows.push_on_console t) Help.text in *)
+    | _, [ "help" ] ->
+        (* let* () = list.iter_s (Windows.push_on_console t) Help.text in *)
         Lwt.return t
+    | _, [ "whoami"; server ] -> (
+        Log.debug (fun m -> m "whoami on %S" server);
+        match Server.Map.find_opt server servers with
+        | Some server ->
+            let tasks = Fiber.tasks_of_server t.fibers ~on:server in
+            let nickname = Tasks.current_nickname tasks in
+            t.action
+              (Action.new_message ~uid:Uid.console
+                 (Message.msgf ~now:t.now "Your nickname on %a is %a" Server.pp
+                    server Cri.Nickname.pp nickname));
+            Lwt.return t
+        | None ->
+            t.action
+              (Action.set_status
+                 (Status.errorf "Server %S does not exist" server));
+            Lwt.return t)
+    | _, [ "nickname"; _nickname ] -> assert false
+    | _, [ "server"; "list" ] when Server.Map.cardinal servers = 0 ->
+        t.action
+          (Action.new_message ~uid:Uid.console
+             (Message.msgf ~now:t.now "You are not connected to any servers"));
+        Lwt.return t
+    | _, [ "server"; "list" ] ->
+        t.action
+          (Action.new_message ~uid:Uid.console
+             (Message.msgf ~now:t.now "%a"
+                Fmt.(list ~sep:(const string "\n") (using fst string))
+                (Server.Map.bindings servers)));
+        Lwt.return t
+    | 0, [ "join"; _channel ] when Server.Map.cardinal servers = 1 ->
+        assert false
+    | 0, [ "join"; _channel ] -> assert false
+    | _, [ "join"; _channel; _server ] -> assert false
     | _ ->
         t.action (Action.set_status (Status.errorf "Invalid command: %S" cmd));
         Lwt.return t
-
-  let run t =
-    let open Lwt.Infix in
-    process t >|= fun t -> `Yield t
 end
 
 module Message = struct
-  let process t = Lwt_stream.next t.message >>= fun _msg -> Lwt.return t
-
-  let run t =
-    let open Lwt.Infix in
-    process t >|= fun t -> `Yield t
+  let process t ~uid:_ _msg = Lwt.return t
 end
-
-module Fiber = struct
-  let run t =
-    Fiber.process t.fibers >>= function
-    | Some fibers -> Lwt.return (`Yield { t with fibers })
-    | None -> Lwt.return `Quit
-end
-
-module Ui = struct end
 
 let process t =
+  let open Lwt.Infix in
+  let on_message t =
+    Lwt_stream.next t.message >|= fun (uid, v) -> `Message (uid, v)
+  in
+  let on_command t =
+    Lwt_stream.next t.command >|= fun (uid, v) -> `Command (uid, v)
+  in
+  let on_fiber t =
+    Fiber.process t.fibers >>= function
+    | Some fibers -> Lwt.return (`Yield { t with fibers })
+    | None -> Lwt.return `Stop
+  in
+
   let rec go t =
-    (* NOTE(dinosaure): must be [Lwt.pick] which cancels threads! *)
-    Lwt.pick [ Command.run t; Message.run t; Fiber.run t ] >>= function
+    Lwt.pick [ on_message t; on_command t; on_fiber t ] >>= function
+    | `Message (uid, v) -> Message.process t ~uid v >>= go
+    | `Command (uid, v) ->
+        Log.debug (fun m -> m "Got a new command!");
+        Command.process t ~uid v >>= go
     | `Yield t -> Lwt.pause () >>= fun () -> go t
-    | `Quit ->
-        Log.debug (fun m -> m "The engine is finished.");
+    | `Stop ->
+        Log.debug (fun m -> m "The engine is finished!");
         Lwt.return_unit
   in
   go t

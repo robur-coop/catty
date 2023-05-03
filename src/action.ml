@@ -5,3 +5,4 @@ type t =
 
 let set_status status = Set_status status
 let new_message ~uid msg = New_message (uid, msg)
+let new_window ~uid name = New_window (uid, name)

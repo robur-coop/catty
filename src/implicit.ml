@@ -154,4 +154,10 @@ module Make (Key_info : KEY_INFO) = struct
 
   let prove : type a. a witness -> t -> a option =
    fun (module Witness) t -> match t with Witness.T v -> Some v | _ -> None
+
+  let equal : type a. a witness -> t -> t -> bool =
+   fun (module Witness) a b ->
+    match (prove (module Witness) a, prove (module Witness) b) with
+    | Some _, Some _ -> true
+    | _ -> false
 end

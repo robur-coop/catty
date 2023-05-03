@@ -21,7 +21,7 @@ val new_window : t -> name:string -> t
 
 (** Push a message into a window. *)
 
-val push_on_console : t -> string -> unit Lwt.t
+val push_on_console : t -> string list -> unit Lwt.t
 val push_on_current : t -> Message.t -> unit Lwt.t
 val push_on : t -> uid:Uid.t -> Message.t -> unit Lwt.t
 

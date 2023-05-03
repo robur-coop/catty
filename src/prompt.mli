@@ -9,8 +9,8 @@
 type cursor = int * int
 
 val make :
-     command:(string -> unit)
-  -> message:(string -> unit)
+     command:(Uid.t * string -> unit)
+  -> message:(Uid.t * string -> unit)
   -> cursor Lwd.var
   -> Status.t Lwd.var
   -> Mode.t Lwd.var

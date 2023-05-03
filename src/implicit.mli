@@ -24,4 +24,5 @@ module Make (Key_info : KEY_INFO) : sig
   val bindings : unit -> pack list
   val v : 'a witness -> 'a -> t
   val prove : 'a witness -> t -> 'a option
+  val equal : 'a witness -> t -> t -> bool
 end

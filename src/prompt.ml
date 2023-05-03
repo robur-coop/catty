@@ -8,8 +8,8 @@ module Log = (val Logs.src_log src : Logs.LOG)
 let neg x = -x
 
 type t =
-  { command : string -> unit
-  ; message : string -> unit
+  { command : Uid.t * string -> unit
+  ; message : Uid.t * string -> unit
   ; cursor : Rp.Cursor.cursor
   ; history_command : History.t
   ; history_message : History.t
@@ -70,7 +70,7 @@ module Utils = struct
 end
 
 module Insertion = struct
-  let handler ~(hook : ?mode:_ -> _ -> unit) state = function
+  let handler ~(hook : ?mode:_ -> _ -> unit) state current_window = function
     | `ASCII chr, [] when Utils.is_print chr ->
         let cursor = state.cursor in
         let cursor = Rp.Cursor.insert_char cursor (Uchar.of_char chr) in
@@ -124,7 +124,7 @@ module Insertion = struct
           Rp.iter_range (Uutf.Buffer.add_utf_8 buf) rope 0 len;
           Buffer.contents buf
         in
-        state.message msg;
+        state.message (current_window.Windows.uid, msg);
         hook { state with cursor = Rp.Cursor.create Rp.empty 0 };
         `Handled
     | _ -> `Unhandled
@@ -201,7 +201,8 @@ module Normal = struct
 end
 
 module Command = struct
-  let handler ~cursor ~(hook : ?mode:_ -> _ -> unit) state = function
+  let handler ~cursor ~(hook : ?mode:_ -> _ -> unit) state current_window =
+    function
     | `ASCII chr, [] when Utils.is_print chr ->
         let cursor = Rp.Cursor.insert_char cursor (Uchar.of_char chr) in
         let cursor = Rp.Cursor.move_forward cursor 1 in
@@ -249,7 +250,7 @@ module Command = struct
         in
         hook ~mode:(`Command (Rp.Cursor.create Rp.empty 0)) state;
         Log.debug (fun m -> m "Send a new command: %S" cmd);
-        state.command cmd;
+        state.command (current_window.Windows.uid, cmd);
         `Handled
     | _ -> `Unhandled
 end
@@ -281,7 +282,7 @@ end
 
 type cursor = int * int
 
-let make ~command ~message cursor status mode _w =
+let make ~command ~message cursor status mode current_window =
   let ( let* ) x f = Lwd.bind ~f x in
   let ( let+ ) x f = Lwd.map ~f x in
   let ( and+ ) = Lwd.map2 ~f:(fun x y -> (x, y)) in
@@ -294,18 +295,20 @@ let make ~command ~message cursor status mode _w =
     Lwd.set state state'
   in
 
-  let handler state mode key =
+  let handler state mode current_window key =
     match mode with
     | `Normal -> Normal.handler ~hook state key
-    | `Insertion -> Insertion.handler ~hook state key
-    | `Command cursor -> Command.handler ~cursor ~hook state key
+    | `Insertion -> Insertion.handler ~hook state current_window key
+    | `Command cursor -> Command.handler ~cursor ~hook state current_window key
     | `Visual -> assert false
   in
 
-  let update_prompts state mode (y, w) =
+  let update_prompts state mode (y, w) current_window =
     let user = User_prompt.render ~cursor ~y ~w state mode in
     let command = Command_prompt.render ~cursor ~y ~w mode in
-    Ui.keyboard_area (handler state mode) (Ui.atom (I.vcat [ user; command ]))
+    Ui.keyboard_area
+      (handler state mode current_window)
+      (Ui.atom (I.vcat [ user; command ]))
   in
 
   let update_position ~x:_ ~y ~w ~h:_ () =
@@ -316,8 +319,9 @@ let make ~command ~message cursor status mode _w =
   let* prompts =
     let+ state = Lwd.get state
     and+ position = Lwd.get position
-    and+ mode = Lwd.get mode in
-    update_prompts state mode position
+    and+ mode = Lwd.get mode
+    and+ current_window = Lwd.get current_window in
+    update_prompts state mode position current_window
   in
 
   let* status = Lwd.map ~f:Status.render (Lwd.get status) in

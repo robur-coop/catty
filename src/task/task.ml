@@ -54,4 +54,22 @@ module Ping = struct
   let v ?prefix () = Lwt.return (prefix, [])
 end
 
-let ping = Implicit.inj (module Ping)
+type 'a t = ('a * msg list) Lwt.t
+
+let ( let* ) x f =
+  let open Lwt.Infix in
+  x >>= fun (v, msgs0) ->
+  f v >|= fun (v, msgs1) -> (v, List.rev_append msgs0 msgs1)
+
+let ( and* ) a b =
+  let open Lwt.Infix in
+  Lwt.both a b >>= fun ((a, msgs0), (b, msgs1)) ->
+  Lwt.return ((a, b), List.rev_append msgs0 msgs1)
+
+let return v = Lwt.return (v, [])
+let ping_witness = Implicit.inj (module Ping)
+
+let ping ?prefix () =
+  let open Lwt.Syntax in
+  let* state, msgs = Ping.v ?prefix () in
+  Lwt.return (Implicit.v ping_witness state, msgs)

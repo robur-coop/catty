@@ -1,7 +1,12 @@
 type t
 
 val pp : t Fmt.t
-val make : ?tls:bool -> Address.t -> Cri_lwt.send -> t
-val uid : t -> Uid.t
+val make : ?name:string -> Address.t -> t
 val address : t -> Address.t
-val send : t -> ?prefix:Cri.Protocol.prefix -> 'a Cri.Protocol.t -> 'a -> unit
+val equal : t -> t -> bool
+val compare : t -> t -> int
+
+module Set : Set.S with type elt = t
+module Map : Map.S with type key = string
+
+val to_map : Set.t -> t Map.t
