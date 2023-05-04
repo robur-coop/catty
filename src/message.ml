@@ -1,5 +1,11 @@
 type t = { nickname : Art.key; message : string list; time : Ptime.t }
 
+let pp ppf { nickname; message; time } =
+  Fmt.pf ppf "(%a)%s:%a" (Ptime.pp_rfc3339 ()) time
+    (nickname :> string)
+    Fmt.(Dump.list string)
+    message
+
 let nickname { nickname; _ } = nickname
 let time { time; _ } = time
 

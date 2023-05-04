@@ -184,8 +184,16 @@ module Command = struct
                 Fmt.(list ~sep:(const string "\n") (using fst string))
                 (Server.Map.bindings servers)));
         Lwt.return_some t
-    | 0, [ "join"; _channel ] when Server.Map.cardinal servers = 1 ->
-        assert false
+    | 0, [ "join"; channel ] when Server.Map.cardinal servers = 1 -> (
+        match Cri.Channel.of_string channel with
+        | Ok channel ->
+            let uid = Uid.gen () in
+            t.action (Action.new_window ~uid (Cri.Channel.to_string channel));
+            Lwt.return_some t
+        | Error (`Msg _err) ->
+            t.action
+              (Action.set_status (Status.errorf "Invalid channel: %S" channel));
+            Lwt.return_some t)
     | 0, [ "join"; _channel ] -> assert false
     | _, [ "join"; _channel; _server ] -> assert false
     | _ ->
@@ -235,8 +243,12 @@ let process t =
         (* Fiber.process >|= Option'.iter? *)
         Fiber.process ~on msg t.fibers
         >>= function
-        | Some fibers -> go { t with fibers }
-        | None -> Lwt.return_unit)
+        | Some fibers ->
+            Log.debug (fun m -> m "Continue the process");
+            go { t with fibers }
+        | None ->
+            Log.debug (fun m -> m "No process are left");
+            Lwt.return_unit)
     | `Delete server ->
         let { Fiber.servers; quit } = t.fibers in
         let servers =

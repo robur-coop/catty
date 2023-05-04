@@ -1,3 +1,7 @@
+let src = Logs.Src.create "kit.windows"
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 [@@@warning "-32"]
 
 module Name = struct
@@ -49,7 +53,7 @@ end
 
 type t =
   { current : Rb.ro elt Lwd.var
-  ; windows : < rd : unit ; wr : unit > elt Zip.t
+  ; mutable windows : < rd : unit ; wr : unit > elt Zip.t
   ; now : unit -> Ptime.t
   ; host : [ `raw ] Domain_name.t
   }
@@ -103,17 +107,22 @@ let push_on t ~uid msg =
 
 let move_forward t =
   match Zip.move_forward t.windows with
-  | None -> t
-  | Some windows -> { t with windows }
+  | None -> Lwt.return_unit
+  | Some windows ->
+      t.windows <- windows;
+      Lwt.return_unit
 
 let move_backward t =
   match Zip.move_backward t.windows with
-  | None -> t
-  | Some windows -> { t with windows }
+  | None -> Lwt.return_unit
+  | Some windows ->
+      t.windows <- windows;
+      Lwt.return_unit
 
-let new_window t ~name =
+let new_window t ~uid ~name =
   let buffer = Rb.make 0x1000 in
   let nicknames = Art.make () in
-  let uid = Uid.gen () in
   let elt = { nicknames; name = Name name; buffer; uid } in
-  { t with windows = Zip.insert elt t.windows }
+  Lwd.set t.current { elt with buffer = Rb.to_ro elt.buffer };
+  t.windows <- Zip.insert elt t.windows;
+  Lwt.return_unit

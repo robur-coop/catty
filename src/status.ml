@@ -4,6 +4,13 @@ open Nottui
 type t =
   [ `Error of string | `Progress of Uchar.t * string | `Done of string | `None ]
 
+let pp ppf = function
+  | `Error str -> Fmt.pf ppf "@[<1>(Error %S)@]" str
+  | `Progress (uchar, str) ->
+      Fmt.pf ppf "@[<1>(Progress %04x %S)@]" (Uchar.to_int uchar) str
+  | `Done str -> Fmt.pf ppf "@[<1>(Done %S)@]" str
+  | `None -> Fmt.pf ppf "None"
+
 let render = function
   | `None -> I.uchars A.empty [| Uchar.of_int 0x2205 |] |> Ui.atom
   | `Error text ->

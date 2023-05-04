@@ -198,11 +198,13 @@ let fiber host nicknames realname =
       Lwt_stream.get action >>= function
       | None -> Lwt.return_unit
       | Some action -> (
+          Logs.debug (fun m -> m "Got a new action: %a" Kit.Action.pp action);
           match action with
           | Kit.Action.Set_status v ->
               Lwd.set status v;
               unroll_action ()
-          | Kit.Action.New_window _ -> unroll_action ()
+          | Kit.Action.New_window (uid, name) ->
+              Kit.Windows.new_window windows ~uid ~name >>= unroll_action
           | Kit.Action.New_message (uid, msg) ->
               Kit.Windows.push_on windows ~uid msg >>= unroll_action)
     in
