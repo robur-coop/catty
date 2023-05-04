@@ -193,7 +193,7 @@ let fiber host nicknames realname =
     let status = Lwd.var `None in
     let windows = Kit.Windows.make ~now host in
 
-    let rec unroll_action windows =
+    let rec unroll_action () =
       let open Lwt.Infix in
       Lwt_stream.get action >>= function
       | None -> Lwt.return_unit
@@ -201,9 +201,8 @@ let fiber host nicknames realname =
           match action with
           | Kit.Action.Set_status v ->
               Lwd.set status v;
-              unroll_action windows
-          | Kit.Action.New_window (uid, name) ->
-              Kit.Windows.new_window windows ~uid ~name |> unroll_action
+              unroll_action ()
+          | Kit.Action.New_window _ -> unroll_action ()
           | Kit.Action.New_message (uid, msg) ->
               Kit.Windows.push_on windows ~uid msg >>= unroll_action)
     in
@@ -217,10 +216,10 @@ let fiber host nicknames realname =
       let* tabs = Kit.Tabs.make tabs in
       Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
     in
-    (ui, cursor, quit, engine, unroll_action windows)
+    (ui, cursor, quit, engine, unroll_action)
   in
   Lwt.join
-    [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine; action ]
+    [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine; action () ]
 
 open Cmdliner
 

@@ -4,23 +4,12 @@ let nickname { nickname; _ } = nickname
 let time { time; _ } = time
 
 let split_at ~len:max str =
-  let buf = Buffer.create max in
-  let add_utf_8_character buf = function
-    | `Malformed _ -> Uutf.Buffer.add_utf_8 buf Uutf.u_rep
-    | `Uchar uchr -> Uutf.Buffer.add_utf_8 buf uchr
-  in
-  let folder (acc, len) _off uchr =
-    if len >= max then (
-      let str = Buffer.contents buf in
-      Buffer.clear buf;
-      add_utf_8_character buf uchr;
-      (str :: acc, 0))
-    else (
-      add_utf_8_character buf uchr;
-      (acc, succ len))
+  let rec go acc off len =
+    if len <= max then String.sub str off len :: acc
+    else go (String.sub str off max :: acc) (off + max) (len - max)
   in
   if max <= 0 then invalid_arg "split_at";
-  Uutf.String.fold_utf_8 folder ([], 0) str |> fun (acc, _) -> List.rev acc
+  go [] 0 (String.length str) |> List.rev
 
 let split_at ~len { message; _ } =
   List.map (split_at ~len) message |> List.concat

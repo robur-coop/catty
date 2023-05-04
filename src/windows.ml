@@ -79,7 +79,7 @@ let push_on_console t message =
   if Uid.equal (Lwd.peek t.current).uid Uid.console then
     Lwd.set t.current
       { nicknames; name = Console; buffer = Rb.to_ro buffer; uid = Uid.console };
-  Lwt.return t
+  Lwt.return_unit
 
 let push_on_current t msg =
   let[@warning "-8"] (Some { nicknames; name; buffer; uid }) =
@@ -87,7 +87,7 @@ let push_on_current t msg =
   in
   Rb.fit_and_push buffer msg;
   Lwd.set t.current { nicknames; name; buffer = Rb.to_ro buffer; uid };
-  Lwt.return t
+  Lwt.return_unit
 
 let push_on t ~uid msg =
   match Zip.get t.windows with
@@ -98,8 +98,8 @@ let push_on t ~uid msg =
           Zip.find (fun { uid = uid'; _ } -> Uid.equal uid uid') t.windows
         in
         Rb.fit_and_push buffer msg;
-        Lwt.return t
-      with Not_found -> Lwt.return t)
+        Lwt.return_unit
+      with Not_found -> Lwt.return_unit)
 
 let move_forward t =
   match Zip.move_forward t.windows with
@@ -111,9 +111,9 @@ let move_backward t =
   | None -> t
   | Some windows -> { t with windows }
 
-let new_window t ~uid ~name =
+let new_window t ~name =
   let buffer = Rb.make 0x1000 in
   let nicknames = Art.make () in
+  let uid = Uid.gen () in
   let elt = { nicknames; name = Name name; buffer; uid } in
-  Lwd.set t.current { elt with buffer = Rb.to_ro elt.buffer };
   { t with windows = Zip.insert elt t.windows }
