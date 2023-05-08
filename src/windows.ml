@@ -26,6 +26,7 @@ module Zip : sig
   val find : ('a -> bool) -> 'a t -> 'a
   val to_index : 'a t -> int
   val fold : (active:bool -> 'acc -> 'a -> 'acc) -> 'acc -> 'a t -> 'acc
+  val filter : ('a -> 'a option) -> 'a t -> 'a t
   val pp : 'a Fmt.t -> 'a t Fmt.t
 end = struct
   type 'a t = 'a list * 'a list
@@ -67,6 +68,15 @@ end = struct
         let acc = f ~active:true acc active in
         let acc = List.fold_left (f ~active:false) acc l in
         acc
+
+  let filter predicate (p, l) =
+    let p = List.filter_map predicate p in
+    match (p, l) with
+    | [], [] -> invalid_arg "A zipper must contains one element"
+    | [ x ], [] -> ([], [ x ])
+    | [], l -> ([], l)
+    | (x :: r as p), _ -> (
+        match List.filter_map predicate l with [] -> (r, [ x ]) | l -> (p, l))
 
   let find predicate (p, l) =
     try List.find predicate (List.rev p)
@@ -130,10 +140,12 @@ let push_on t ~uid msg =
   | Some { uid = uid'; _ } when Uid.equal uid uid' -> push_on_current t msg
   | _ -> (
       try
-        let { buffer; _ } =
+        let { buffer; name; _ } =
           Zip.find (fun { uid = uid'; _ } -> Uid.equal uid uid') t.windows
         in
         Rb.fit_and_push buffer msg;
+        Log.debug (fun m ->
+            m "A new message was added into %a" Window.Name.pp name);
         Lwt.return_unit
       with Not_found -> Lwt.return_unit)
 
@@ -172,7 +184,6 @@ let move_backward t =
       Lwt.return_unit
 
 let move_to t idx =
-  Log.debug (fun m -> m "old: %a" (Zip.pp pp_elt) t.windows);
   match Zip.move_to t.windows idx with
   | None -> Fmt.invalid_arg "Invalid given window index: %d" idx
   | Some windows ->
@@ -188,6 +199,16 @@ let new_window t ~uid ~name =
   Lwd.set t.current { elt with buffer = Rb.to_ro elt.buffer };
   t.windows <- Zip.insert elt t.windows;
   t.windows <- Option.get (Zip.move_forward t.windows);
+  Lwd.set t.tabs (zip_to_tabs t);
+  Lwt.return_unit
+
+let delete_window t ~uid =
+  let windows =
+    Zip.filter (fun elt -> if elt.uid = uid then None else Some elt) t.windows
+  in
+  let elt = Option.get (Zip.get windows) in
+  t.windows <- windows;
+  Lwd.set t.current { elt with buffer = Rb.to_ro elt.buffer };
   Lwd.set t.tabs (zip_to_tabs t);
   Lwt.return_unit
 

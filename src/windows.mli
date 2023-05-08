@@ -14,6 +14,8 @@ val tabs : t -> Tabs.t Lwd.var
 val new_window : t -> uid:Uid.t -> name:string -> unit Lwt.t
 (** [new_window t ~uid ~name] makes a new window with the given [name]. *)
 
+val delete_window : t -> uid:Uid.t -> unit Lwt.t
+
 (** Push a message into a window. *)
 
 val push_on_console : t -> string list -> unit Lwt.t

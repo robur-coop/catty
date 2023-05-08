@@ -204,6 +204,8 @@ let fiber host nicknames realname =
               unroll_action ()
           | Kit.Action.New_window (uid, name) ->
               Kit.Windows.new_window windows ~uid ~name >>= unroll_action
+          | Kit.Action.Delete_window uid ->
+              Kit.Windows.delete_window windows ~uid >>= unroll_action
           | Kit.Action.New_message (uid, msg) ->
               Kit.Windows.push_on windows ~uid msg >>= unroll_action)
     in

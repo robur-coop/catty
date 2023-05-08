@@ -158,6 +158,11 @@ module Channel = struct
           (Action.new_message ~uid:t.uid
              (Message.msgf ~now:t.now "Users: %a" Fmt.(Dump.list string) users));
         Lwt.return (`Continue ([], t))
+    | ERR_NOTREGISTERED, () ->
+        t.action
+          (Action.set_status (Status.errorf "You are not (yet?) registered."));
+        t.action (Action.delete_window ~uid:t.uid);
+        Lwt.return (`Stop [])
     | Privmsg, (dsts, str) ->
         if List.exists (( = ) (Cri.Destination.Channel t.channel)) dsts then (
           t.action

@@ -1,3 +1,7 @@
+let src = Logs.Src.create "kit.message"
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 type t = { nickname : Art.key; message : string list; time : Ptime.t }
 
 let pp ppf { nickname; message; time } =
@@ -9,13 +13,29 @@ let pp ppf { nickname; message; time } =
 let nickname { nickname; _ } = nickname
 let time { time; _ } = time
 
-let split_at ~len:max str =
-  let rec go acc off len =
-    if len <= max then String.sub str off len :: acc
-    else go (String.sub str off max :: acc) (off + max) (len - max)
-  in
+let split_at ~len:max utf_8_str =
   if max <= 0 then invalid_arg "split_at";
-  go [] 0 (String.length str) |> List.rev
+  let folder acc _pos = function
+    | `Malformed _ -> Uutf.u_rep :: acc
+    | `Uchar uchr -> uchr :: acc
+  in
+  let rec go acc len lst =
+    match (acc, lst) with
+    | [], [] -> [ [] ]
+    | hd :: tl, x :: r ->
+        if len < max then go ((x :: hd) :: tl) (succ len) r
+        else go ([ x ] :: hd :: tl) 0 r
+    | [], x :: r ->
+        assert (len = 0);
+        go [ [ x ] ] 1 r
+    | hd :: tl, [] -> List.rev (hd :: tl)
+  in
+  let lst = Uutf.String.fold_utf_8 folder [] utf_8_str in
+  let lst = List.rev lst in
+  let lst = go [] 0 lst in
+  let lst = List.rev_map List.rev lst in
+  let lst = List.map Array.of_list lst in
+  List.rev_map Notty.(I.uchars A.empty) lst
 
 let split_at ~len { message; _ } =
   List.map (split_at ~len) message |> List.concat

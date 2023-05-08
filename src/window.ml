@@ -47,10 +47,7 @@ let render_message ~width ~width_nicknames msg nicknames =
   let rest =
     List.map @@ fun msg ->
     I.hcat
-      [ I.void (Message.width_time + 1 + width_nicknames) 1
-      ; I.strf "│"
-      ; I.strf "%s" msg
-      ]
+      [ I.void (Message.width_time + 1 + width_nicknames) 1; I.strf "│"; msg ]
   in
   I.vcat
     (I.hcat
@@ -59,7 +56,7 @@ let render_message ~width ~width_nicknames msg nicknames =
        ; I.hsnap ~align:`Right width_nicknames
            (I.strf ~attr:A.(fg color) "%s" (Message.nickname msg :> string))
        ; I.strf "│"
-       ; I.strf "%s" (List.hd message)
+       ; List.hd message
        ]
     :: rest (List.tl message))
 
