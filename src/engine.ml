@@ -265,12 +265,16 @@ let process t =
           | None -> `Delete server)
         t.recvs
     in
-    match recvs with [] -> Lwt.return `Yield | recvs -> Lwt.pick recvs
+    match recvs with
+    | [] ->
+        let forever, _ = Lwt.task () in
+        forever
+    | recvs -> Lwt.pick recvs
   in
 
   let rec go t =
     Lwt.pick [ on_message t; on_command t; on_recvs t ] >>= function
-    | `Yield -> Lwt.pause () >>= fun () -> go t
+    | `Yield -> go t
     | `Quit ->
         Log.debug (fun m -> m "Quit the engine");
         Lwt.return_unit
