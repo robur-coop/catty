@@ -7,6 +7,31 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 type t = { w : int; h : int; p : int }
 
+module Name = struct
+  type t = Console | Name of string
+
+  let inf = -1
+  and sup = 1
+
+  let compare a b =
+    match (a, b) with
+    | Console, Console -> 0
+    | Name a, Name b -> String.compare a b
+    | Console, Name _ -> inf
+    | Name _, Console -> sup
+
+  let pp ppf = function
+    | Console -> Fmt.string ppf "console"
+    | Name name -> Fmt.string ppf name
+end
+
+type 'c elt =
+  { nicknames : Notty.A.color Art.t
+  ; buffer : ('c, Message.t) Rb.t
+  ; name : Name.t
+  ; uid : Uid.t
+  }
+
 let width_nicknames msgs =
   let f msg acc = max (String.length (Message.nickname msg :> string)) acc in
   Rb.iter ~f msgs 0
@@ -65,7 +90,7 @@ let handler ~hook state mode msgs key =
       `Handled
   | _ -> `Unhandled
 
-let make mode w =
+let make mode current =
   let ( let* ) x f = Lwd.bind ~f x in
   let ( let+ ) x f = Lwd.map ~f x in
   let ( and+ ) = Lwd.map2 ~f:(fun x y -> (x, y)) in
@@ -76,7 +101,7 @@ let make mode w =
   let* document =
     let+ state = Lwd.get state
     and+ mode = Lwd.get mode
-    and+ { Windows.nicknames; buffer; _ } = Lwd.get w in
+    and+ { nicknames; buffer; _ } = Lwd.get current in
 
     Ui.keyboard_area
       (handler ~hook state mode buffer)

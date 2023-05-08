@@ -13,7 +13,7 @@ type t =
   ; ctx : Mimic.ctx
   ; host : [ `raw ] Domain_name.t
   ; user : User.t
-  ; windows : (Uid.t, string) Hashtbl.t
+  ; windows : (Uid.t, Server.t * Cri.Channel.t * Cri_lwt.send) Hashtbl.t
   ; recvs : (Cri_lwt.recv * Server.t) list
   }
 
@@ -189,7 +189,18 @@ module Command = struct
         | Ok channel ->
             let uid = Uid.gen () in
             t.action (Action.new_window ~uid (Cri.Channel.to_string channel));
-            Lwt.return_some t
+            let open Lwt.Syntax in
+            let _, on = Server.Map.min_binding servers in
+            let* state, msgs =
+              Tasks.channel ~now:t.now ~action:t.action ~uid
+                ~prefix:(prefix_of_engine t) on channel
+            in
+            let* fibers = Fiber.add_task ~on (state, msgs) t.fibers in
+            let[@warning "-8"] (Some send) =
+              Fiber.send_of_server ~on t.fibers
+            in
+            Hashtbl.add t.windows uid (on, channel, send);
+            Lwt.return_some { t with fibers }
         | Error (`Msg _err) ->
             t.action
               (Action.set_status (Status.errorf "Invalid channel: %S" channel));
@@ -208,7 +219,33 @@ module Command = struct
 end
 
 module Message = struct
-  let process t ~uid:_ _msg = Lwt.return t
+  let process t ~uid msg =
+    let servers = Fiber.servers t.fibers in
+    match Hashtbl.find_opt t.windows uid with
+    | Some (server, channel, send) -> (
+        match Server.Map.find_opt (Server.name server) servers with
+        | Some server ->
+            let tasks = Fiber.tasks_of_server t.fibers ~on:server in
+            let nickname = Tasks.current_nickname tasks in
+            let prefix = Cri.Protocol.prefix nickname in
+
+            t.action
+              (Action.new_message ~uid
+                 (Message.msgf ~now:t.now ~prefix "%s" msg));
+            let privmsg =
+              let dsts = [ Cri.Destination.Channel channel ] in
+              (dsts, msg)
+            in
+            Fiber.send_msgs send
+              [ Fiber.Message
+                  { prefix = Some (prefix_of_engine t)
+                  ; message =
+                      Cri.Protocol.Message (Cri.Protocol.Privmsg, privmsg)
+                  }
+              ];
+            Lwt.return t
+        | None -> Lwt.return t)
+    | None -> Lwt.return t
 end
 
 let process t =

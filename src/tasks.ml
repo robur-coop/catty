@@ -132,11 +132,61 @@ module Notice = struct
   let v ~now ~action server = Lwt.return ({ now; action; server }, [])
 end
 
+module Channel = struct
+  let name = "channel"
+
+  type t =
+    { now : unit -> Ptime.t
+    ; on : Server.t
+    ; uid : Uid.t
+    ; channel : Cri.Channel.t
+    ; action : Action.t -> unit
+    }
+
+  let recv t ?prefix (Cri.Protocol.Message (cmd, v)) =
+    match (cmd, v) with
+    | RPL_TOPIC, (channel', topic) when Cri.Channel.equal t.channel channel' ->
+        t.action
+          (Action.new_message ~uid:t.uid
+             (Message.msgf ~now:t.now "The topic is: %s" topic));
+        Lwt.return (`Continue ([], t))
+    | RPL_NAMREPLY, { Cri.Protocol.names; _ } ->
+        let users =
+          List.map (fun (_, nickname) -> Cri.Nickname.to_string nickname) names
+        in
+        t.action
+          (Action.new_message ~uid:t.uid
+             (Message.msgf ~now:t.now "Users: %a" Fmt.(Dump.list string) users));
+        Lwt.return (`Continue ([], t))
+    | Privmsg, (dsts, str) ->
+        if List.exists (( = ) (Cri.Destination.Channel t.channel)) dsts then (
+          t.action
+            (Action.new_message ~uid:t.uid
+               (Message.msgf ?prefix ~now:t.now "%s" str));
+          Lwt.return (`Continue ([], t)))
+        else Lwt.return (`Continue ([], t))
+    | _ -> Lwt.return (`Continue ([], t))
+
+  let stop _ = Lwt.return [] (* TODO *)
+
+  let v ~now ?prefix ~action ?(uid = Uid.console) on channel =
+    let msgs =
+      [ Message
+          { prefix
+          ; message =
+              Cri.Protocol.Message (Cri.Protocol.Join, [ (channel, None) ])
+          }
+      ]
+    in
+    Lwt.return ({ now; on; uid; channel; action }, msgs)
+end
+
 open Lwt.Syntax
 
 let nickname_witness = Task.inj (module Nickname)
 let error_witness = Task.inj (module Error)
 let notice_witness = Task.inj (module Notice)
+let channel_witness = Task.inj (module Channel)
 
 let nickname ~now ~action ?prefix server nicknames =
   let* state, msgs = Nickname.v ~now ~action ?prefix server nicknames in
@@ -149,6 +199,10 @@ let error ~now ~action server =
 let notice ~now ~action server =
   let* state, msgs = Notice.v ~now ~action server in
   Lwt.return (Task.v notice_witness state, msgs)
+
+let channel ~now ?prefix ~action ?uid on channel =
+  let* state, msgs = Channel.v ~now ?prefix ~action ?uid on channel in
+  Lwt.return (Task.v channel_witness state, msgs)
 
 let current_nickname tasks =
   Log.debug (fun m ->

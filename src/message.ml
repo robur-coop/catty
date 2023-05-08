@@ -30,11 +30,17 @@ let make ~nickname ~time message = { nickname; time; message }
 
 let msgf ~now ?prefix ?server fmt =
   let nickname =
-    match (prefix, server) with
+    match ((prefix : Cri.Protocol.prefix option), server) with
     | None, Some server ->
         Server.address server |> Fmt.to_to_string Address.pp |> Art.key
     | Some prefix, _ ->
-        Fmt.to_to_string Cri.Protocol.pp_prefix prefix |> Art.key
+        let prefix =
+          match prefix with
+          | Cri.Protocol.Server host ->
+              Fmt.to_to_string Cri.Protocol.pp_host host
+          | Cri.Protocol.User { name; _ } -> Cri.Nickname.to_string name
+        in
+        Art.key prefix
     | None, None -> Art.key "kitty"
   in
   Fmt.kstr

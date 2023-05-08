@@ -189,7 +189,6 @@ let fiber host nicknames realname =
       Kit.Engine.make ~ctx ~now ~sleep:Lwt_unix.sleep ~host user
     in
     let mode = Lwd.var `Normal in
-    let tabs = Lwd.var Kit.Tabs.empty in
     let status = Lwd.var `None in
     let windows = Kit.Windows.make ~now host in
 
@@ -210,13 +209,12 @@ let fiber host nicknames realname =
     in
 
     let ui =
-      let window = Kit.Windows.var windows in
       let* prompt =
-        Kit.Prompt.make ~command ~message cursor status mode window
+        Kit.Prompt.make ~command ~message cursor status mode
+          (Kit.Windows.var windows)
       in
-      let* window = Kit.Window.make mode window in
-      let* tabs = Kit.Tabs.make tabs in
-      Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
+      let* window = Kit.Windows.Ui.make mode windows in
+      Lwd.return (Nottui.Ui.vcat [ window; prompt ])
     in
     (ui, cursor, quit, engine, unroll_action)
   in

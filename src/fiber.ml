@@ -84,6 +84,35 @@ let send_msgs send =
   List.iter (fun (Message { prefix; message = Cri.Protocol.Message (w, v) }) ->
       send.Cri_lwt.send ?prefix w v)
 
+let add_task : on:Server.t -> Task.state * Task.msg list -> t -> t Lwt.t =
+ fun ~on (task, msgs) ({ servers; _ } as root) ->
+  let open Lwt.Syntax in
+  let+ servers =
+    Lwt_list.map_p
+      (fun ({ send; tasks; server; _ } as v) ->
+        if Server.equal server on then (
+          send_msgs send msgs;
+          Lwt.return { v with tasks = task :: tasks })
+        else Lwt.return v)
+      (Set.elements servers)
+  in
+  { root with servers = Set.of_list servers }
+
+let send ~on msgs { servers; _ } =
+  let f { send; server; _ } =
+    if Server.equal server on then send_msgs send msgs
+  in
+  List.iter f (Set.elements servers)
+
+let send_of_server ~on { servers; _ } =
+  List.filter_map
+    (fun { send; server; _ } ->
+      if Server.equal server on then Some send else None)
+    (Set.elements servers)
+  |> function
+  | [] -> None
+  | x :: _ -> Some x
+
 let merge { servers = a; quit } { servers = b; _ } =
   { quit; servers = Set.union a b }
 
