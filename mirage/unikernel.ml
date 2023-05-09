@@ -1,8 +1,8 @@
-type state =
-  { env : (string, string) Hashtbl.t
-  ; sigwinch : (int * int) Lwt_condition.t
-  ; mutable size : int * int
-  }
+type state = {
+  env : (string, string) Hashtbl.t;
+  sigwinch : (int * int) Lwt_condition.t;
+  mutable size : int * int;
+}
 
 (* XXX(dinosaure): notable difference between `notty-{unix,lwt}` and `awa-ssh`:
    - The size (and the update of the size) is not given by a signal and a C call
@@ -21,7 +21,7 @@ struct
   module SSH = Awa_mirage.Make (Stack.TCP) (Time) (Mclock)
   module Nottui' = Nottui_mirage.Make (Time)
 
-  let ssh_handler ~stop t = function
+  let ssh_handler ~host ~stop t = function
     | SSH.Pty_req { width; height; max_width; max_height; term } ->
         t.size <- (Int32.to_int width, Int32.to_int height);
         Lwt.return_unit
@@ -33,45 +33,70 @@ struct
         Hashtbl.replace t.env key value;
         Lwt.return_unit
     | SSH.Shell { ic; oc; ec } ->
-        let cursor = Lwd.var (0, 0) in
-        let sleep ns = Time.sleep_ns (Duration.of_f ns) in
-        let now () = Ptime.v (Pclock.now_d_ps ()) in
-        let Kit.Engine.{ status; window; command; message; quit }, engine =
-          Kit.Engine.make ~now ~sleep ()
-        in
-        let mode = Lwd.var `Normal in
-        let tabs = Lwd.var Kit.Tabs.empty in
-        let ui =
+        let ui, cursor, quit, engine, action =
           let ( let* ) x f = Lwd.bind ~f x in
-          let* prompt =
-            Kit.Prompt.make ~command ~message cursor status mode window
+          let cursor = Lwd.var (0, 0)
+          and mode = Lwd.var `Normal
+          and status = Lwd.var `None in
+          let now () = Ptime.v (Pclock.now_d_ps ()) in
+          let user =
+            Catty.User.make ~realname:(Key_gen.realname ())
+              (List.map Cri.Nickname.of_string_exn (Key_gen.nicknames ()))
           in
-          let* window = Kit.Window.make mode window in
-          let* tabs = Kit.Tabs.make tabs in
-          Lwd.return (Nottui.Ui.vcat [ tabs; window; prompt ])
+          let (quit, command, message, action), engine =
+            Catty.Engine.make ~ctx:Mimic.empty ~now
+              ~sleep:(fun ns -> Time.sleep_ns (snd (Pclock.now_d_ps ())))
+              ~host user
+          in
+          let windows = Catty.Windows.make ~now host in
+
+          let rec go () =
+            Lwt_stream.get action >>= function
+            | None -> Lwt.return_unit
+            | Some (Catty.Action.Set_status v) ->
+                Lwd.set status v;
+                go ()
+            | Some (Catty.Action.New_window (uid, name)) ->
+                Catty.Windows.new_window windows ~uid ~name >>= go
+            | Some (Catty.Action.Delete_window uid) ->
+                Catty.Windows.delete_window windows ~uid >>= go
+            | Some (Catty.Action.New_message (uid, msg)) ->
+                Catty.Windows.push_on windows ~uid msg >>= go
+          in
+
+          let ui =
+            let* prompt =
+              Catty.Prompt.make ~command ~message cursor status mode
+                (Catty.Windows.var windows)
+            in
+            let* window = Catty.Windows.Ui.make mode windows in
+            Lwd.return (Nottui.Ui.vcat [ window; prompt ])
+          in
+          (ui, cursor, quit, engine, go)
         in
         Lwt.join
-          [ Nottui'.run ~cursor ~quit (t.size, t.sigwinch) ui ic oc
-          ; Kit.Engine.process engine
+          [
+            Nottui'.run ~cursor ~quit (t.size, t.sigwinch) ui ic oc;
+            Catty.Engine.process engine;
+            action ();
           ]
-        >>= fun () ->
-        Logs.debug (fun m -> m "Stop the connection.");
-        Lwt_switch.turn_off stop
-    | SSH.Channel { command; _ } ->
-        Logs.warn (fun m -> m "Ignore the channel for %S" command);
+        >>= fun () -> Lwt_switch.turn_off stop
+    | SSH.Channel { cmd; _ } ->
+        Logs.warn (fun m -> m "Ignore the channel for %S" cmd);
         Lwt.return_unit
 
-  let tcp_handler pk db flow =
+  let tcp_handler ~host pk db flow =
     let stop = Lwt_switch.create () in
     let server, msgs = Awa.Server.make pk db in
     let state =
-      { env = Hashtbl.create 0x10
-      ; sigwinch = Lwt_condition.create ()
-      ; size = (0, 0)
+      {
+        env = Hashtbl.create 0x10;
+        sigwinch = Lwt_condition.create ();
+        size = (0, 0);
       }
     in
     let* _t =
-      SSH.spawn_server ~stop server msgs flow (ssh_handler ~stop state)
+      SSH.spawn_server ~stop server msgs flow (ssh_handler ~host ~stop state)
     in
     Stack.TCP.close flow
 
@@ -137,7 +162,10 @@ struct
       @@ Awa.Keys.of_string (Key_gen.private_key ())
     in
     let db = generate_db () in
+    let host =
+      Rresult.R.failwith_error_msg (Domain_name.of_string (Key_gen.host ()))
+    in
     Stack.TCP.listen ~port:(Key_gen.port ()) (Stack.tcp stackv4v6)
-      (tcp_handler pk db);
+      (tcp_handler ~host pk db);
     Stack.listen stackv4v6
 end
