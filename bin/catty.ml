@@ -150,9 +150,9 @@ let ctx =
   in
   Mimic.empty
   |> Mimic.fold ~k:k0 tls_edn
-       Mimic.Fun.[ req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls ]
+       Mimic.Fun.[ req Catty.Engine.Connect.dst; req Catty.Engine.Connect.tls ]
   |> Mimic.fold ~k:k1 tcp_edn
-       Mimic.Fun.[ req Kit.Engine.Connect.dst; req Kit.Engine.Connect.tls ]
+       Mimic.Fun.[ req Catty.Engine.Connect.dst; req Catty.Engine.Connect.tls ]
 
 let reporter ppf =
   let report src level ~over k msgf =
@@ -184,44 +184,44 @@ let fiber host nicknames realname =
   let ui, cursor, quit, engine, action =
     let ( let* ) x f = Lwd.bind ~f x in
     let cursor = Lwd.var (0, 0) in
-    let user = Kit.User.make ~realname nicknames in
+    let user = Catty.User.make ~realname nicknames in
     let (quit, command, message, action), engine =
-      Kit.Engine.make ~ctx ~now ~sleep:Lwt_unix.sleep ~host user
+      Catty.Engine.make ~ctx ~now ~sleep:Lwt_unix.sleep ~host user
     in
     let mode = Lwd.var `Normal in
     let status = Lwd.var `None in
-    let windows = Kit.Windows.make ~now host in
+    let windows = Catty.Windows.make ~now host in
 
     let rec unroll_action () =
       let open Lwt.Infix in
       Lwt_stream.get action >>= function
       | None -> Lwt.return_unit
       | Some action -> (
-          Logs.debug (fun m -> m "Got a new action: %a" Kit.Action.pp action);
+          Logs.debug (fun m -> m "Got a new action: %a" Catty.Action.pp action);
           match action with
-          | Kit.Action.Set_status v ->
+          | Catty.Action.Set_status v ->
               Lwd.set status v;
               unroll_action ()
-          | Kit.Action.New_window (uid, name) ->
-              Kit.Windows.new_window windows ~uid ~name >>= unroll_action
-          | Kit.Action.Delete_window uid ->
-              Kit.Windows.delete_window windows ~uid >>= unroll_action
-          | Kit.Action.New_message (uid, msg) ->
-              Kit.Windows.push_on windows ~uid msg >>= unroll_action)
+          | Catty.Action.New_window (uid, name) ->
+              Catty.Windows.new_window windows ~uid ~name >>= unroll_action
+          | Catty.Action.Delete_window uid ->
+              Catty.Windows.delete_window windows ~uid >>= unroll_action
+          | Catty.Action.New_message (uid, msg) ->
+              Catty.Windows.push_on windows ~uid msg >>= unroll_action)
     in
 
     let ui =
       let* prompt =
-        Kit.Prompt.make ~command ~message cursor status mode
-          (Kit.Windows.var windows)
+        Catty.Prompt.make ~command ~message cursor status mode
+          (Catty.Windows.var windows)
       in
-      let* window = Kit.Windows.Ui.make mode windows in
+      let* window = Catty.Windows.Ui.make mode windows in
       Lwd.return (Nottui.Ui.vcat [ window; prompt ])
     in
     (ui, cursor, quit, engine, unroll_action)
   in
   Lwt.join
-    [ Nottui_lwt.run ~cursor ~quit ui; Kit.Engine.process engine; action () ]
+    [ Nottui_lwt.run ~cursor ~quit ui; Catty.Engine.process engine; action () ]
 
 open Cmdliner
 

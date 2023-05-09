@@ -1,4 +1,5 @@
 _build
+log.txt
 setup.data
 setup.log
 doc/*.html

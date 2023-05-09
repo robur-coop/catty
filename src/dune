@@ -1,22 +1,22 @@
 (library
- (name kit)
+ (name catty)
  (modules action tasks fiber uid user history address server windows status
-   message mode tabs rp kit prompt engine help window)
- (public_name kit)
- (libraries kit.task duration cri.lwt domain-name ipaddr ptime logs art fmt
-   astring lwt lwd nottui notty kit.rb kit.rope))
+   message mode tabs rp catty prompt engine help window)
+ (public_name catty)
+ (libraries catty.task duration cri.lwt domain-name ipaddr ptime logs art fmt
+   astring lwt lwd nottui notty catty.rb catty.rope))
 
 (library
  (name rope)
  (modules rope)
- (public_name kit.rope))
+ (public_name catty.rope))
 
 (library
  (name rb)
  (modules rb)
- (public_name kit.rb))
+ (public_name catty.rb))
 
 (library
  (name implicit)
  (modules implicit)
- (public_name kit.implicit))
+ (public_name catty.implicit))

@@ -1,4 +1,4 @@
 (executable
- (name kitty)
+ (name catty)
  (libraries cmdliner mirage-crypto-rng-lwt ca-certs ipaddr.unix tls-mirage
-   duration fmt.tty logs.fmt ptime.clock.os nottui-lwt kit))
+   duration fmt.tty logs.fmt ptime.clock.os nottui-lwt catty))

@@ -1,3 +1,8 @@
 (executable
  (name test)
- (libraries kit.rope alcotest))
+ (libraries catty.rope alcotest))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./test.exe --color=always)))
