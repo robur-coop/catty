@@ -34,8 +34,10 @@ depends: [
   "tls-mirage"
   "mirage-crypto-rng-lwt"
   "hxd"
+  "cri"
   "ca-certs"
   "cmdliner"
+  "alcotest"    {with-test}
 ]
 
 pin-depends: [
