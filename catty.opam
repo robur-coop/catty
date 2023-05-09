@@ -44,5 +44,5 @@ pin-depends: [
   [ "nottui-unix.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
   [ "nottui-lwt.dev" "git+https://github.com/dinosaure/lwd.git#9e78758d5987597bac65fe73bd30ff80741cfe83" ]
   [ "art.dev" "git+https://github.com/dinosaure/art.git#0f1cb7137cfdc094d6071ea5f633ba0c21d47856" ]
-  [ "cri.dev" "git+https://github.com/dinosaure/cri.git#3f016a43f960cbcefac8792e880e32a5b911337f" ]
+  [ "cri.dev" "git+https://github.com/dinosaure/cri.git#93640d64d2da2c17ee6b5450c76201f1d2de31c4" ]
 ]
