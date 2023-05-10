@@ -57,3 +57,9 @@ Currently, we use:
   https://github.com/let-def/lwd/pull/44
 - a unreleased version of `art`
   https://github.com/dinosaure/art
+
+## GitHub mirror
+
+Currently, the GitHub repository is a mirror to
+https://git.robur.io/robur/catty. You can make a pull-request on GitHub or
+directly on https://git.robur.io/ if you want.
