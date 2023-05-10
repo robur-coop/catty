@@ -31,6 +31,10 @@ let host =
   let doc = Key.Arg.info ~doc:"The host of the unikernel." [ "host" ] in
   Key.(create "host" Arg.(required string doc))
 
+let nameservers =
+  let doc = Key.Arg.info ~doc:"DNS nameserver." [ "nameserver" ] in
+  Key.(create "nameservers" Arg.(opt_all string doc))
+
 let catty =
   let awa_pin = "git+https://github.com/mirage/awa-ssh.git" in
   let lwd_pin =
@@ -59,12 +63,16 @@ let catty =
         Key.v nicknames;
         Key.v host;
       ]
-    (random @-> time @-> mclock @-> stackv4v6 @-> job)
+    (random @-> time @-> mclock @-> stackv4v6 @-> mimic @-> job)
 
 let stackv4v6 = generic_stackv4v6 default_network
+let dns = generic_dns_client ~nameservers stackv4v6
+let happy_eyeballs = generic_happy_eyeballs stackv4v6 dns
+let mimic = mimic_happy_eyeballs stackv4v6 dns happy_eyeballs
 
 let () =
   register "catty"
     [
-      catty $ default_random $ default_time $ default_monotonic_clock $ stackv4v6;
+      catty $ default_random $ default_time $ default_monotonic_clock
+      $ stackv4v6 $ mimic;
     ]

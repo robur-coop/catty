@@ -16,12 +16,59 @@ module Make
     (Random : Mirage_random.S)
     (Time : Mirage_time.S)
     (Mclock : Mirage_clock.MCLOCK)
-    (Stack : Tcpip.Stack.V4V6) =
+    (Stack : Tcpip.Stack.V4V6)
+    (Happy_eyeballs : Mimic_happy_eyeballs.S with type flow = Stack.TCP.flow) =
 struct
   module SSH = Awa_mirage.Make (Stack.TCP) (Time) (Mclock)
   module Nottui' = Nottui_mirage.Make (Time)
+  module NSS = Ca_certs_nss.Make (Pclock)
 
-  let ssh_handler ~host ~stop t = function
+  module TLS = struct
+    include Tls_mirage.Make (Stack.TCP)
+
+    type endpoint = Tls.Config.client * Catty.Address.t * Happy_eyeballs.t
+
+    let connect (tls, addr, he) =
+      let port =
+        match addr with `Domain (_, port) | `Inet (_, port) -> port
+      in
+      let addr, host =
+        match addr with
+        | `Domain (domain, _) -> (Domain_name.to_string domain, Some domain)
+        | `Inet (ipaddr, _) -> (Ipaddr.to_string ipaddr, None)
+      in
+      Happy_eyeballs.resolve he addr [ port ] >>= function
+      | Ok (_, flow) -> client_of_flow tls ?host flow
+      | Error (`Msg _err) ->
+          (* TODO(dinosaure): emit the error *) Lwt.return_error `Closed
+  end
+
+  module TCP = struct
+    include Stack.TCP
+
+    type endpoint = Catty.Address.t * Happy_eyeballs.t
+
+    let connect (addr, he) =
+      let port =
+        match addr with `Domain (_, port) | `Inet (_, port) -> port
+      in
+      let addr, host =
+        match addr with
+        | `Domain (domain, _) -> (Domain_name.to_string domain, Some domain)
+        | `Inet (ipaddr, _) -> (Ipaddr.to_string ipaddr, None)
+      in
+      Happy_eyeballs.resolve he addr [ port ] >>= function
+      | Ok (_, flow) -> Lwt.return_ok flow
+      | Error (`Msg _err) ->
+          (* TODO(dinosaure): emit the error *) Lwt.return_error `Closed
+  end
+
+  let tcp_edn, tcp_protocol = Mimic.register ~name:"tcp/ip" (module TCP)
+
+  let tls_edn, tls_protocol =
+    Mimic.register ~priority:10 ~name:"tls" (module TLS)
+
+  let ssh_handler ~host ~stop t ctx = function
     | SSH.Pty_req { width; height; max_width; max_height; term } ->
         t.size <- (Int32.to_int width, Int32.to_int height);
         Lwt.return_unit
@@ -33,6 +80,12 @@ struct
         Hashtbl.replace t.env key value;
         Lwt.return_unit
     | SSH.Shell { ic; oc; ec } ->
+        let ic () =
+          ic () >|= function
+          | `Data cs ->
+              `Data (Cstruct.map (function '\r' -> '\n' | chr -> chr) cs)
+          | `Eof -> `Eof
+        in
         let ui, cursor, quit, engine, action =
           let ( let* ) x f = Lwd.bind ~f x in
           let cursor = Lwd.var (0, 0)
@@ -44,7 +97,7 @@ struct
               (List.map Cri.Nickname.of_string_exn (Key_gen.nicknames ()))
           in
           let (quit, command, message, action), engine =
-            Catty.Engine.make ~ctx:Mimic.empty ~now
+            Catty.Engine.make ~ctx ~now
               ~sleep:(fun ns -> Time.sleep_ns (snd (Pclock.now_d_ps ())))
               ~host user
           in
@@ -85,7 +138,7 @@ struct
         Logs.warn (fun m -> m "Ignore the channel for %S" cmd);
         Lwt.return_unit
 
-  let tcp_handler ~host pk db flow =
+  let tcp_handler ~host pk db ctx flow =
     let stop = Lwt_switch.create () in
     let server, msgs = Awa.Server.make pk db in
     let state =
@@ -96,7 +149,8 @@ struct
       }
     in
     let* _t =
-      SSH.spawn_server ~stop server msgs flow (ssh_handler ~host ~stop state)
+      SSH.spawn_server ~stop server msgs flow
+        (ssh_handler ~host ~stop state ctx)
     in
     Stack.TCP.close flow
 
@@ -156,7 +210,41 @@ struct
     in
     go [] (Key_gen.users ())
 
-  let start _random _time _mclock stackv4v6 =
+  let resolve ctx =
+    let authenticator =
+      match NSS.authenticator () with
+      | Ok v -> v
+      | Error (`Msg err) -> failwith err
+    in
+
+    let k0 he dst with_tls =
+      match with_tls with
+      | true -> Lwt.return_some (Tls.Config.client ~authenticator (), dst, he)
+      | false -> Lwt.return_none
+    in
+    let k1 he dst with_tls =
+      match with_tls with
+      | true -> Lwt.return_none
+      | false -> Lwt.return_some (dst, he)
+    in
+    ctx
+    |> Mimic.fold ~k:k0 tls_edn
+         Mimic.Fun.
+           [
+             req Happy_eyeballs.happy_eyeballs;
+             req Catty.Engine.Connect.dst;
+             req Catty.Engine.Connect.tls;
+           ]
+    |> Mimic.fold ~k:k1 tcp_edn
+         Mimic.Fun.
+           [
+             req Happy_eyeballs.happy_eyeballs;
+             req Catty.Engine.Connect.dst;
+             req Catty.Engine.Connect.tls;
+           ]
+
+  let start _random _time _mclock stackv4v6 ctx =
+    let ctx = resolve ctx in
     let pk =
       Rresult.R.failwith_error_msg
       @@ Awa.Keys.of_string (Key_gen.private_key ())
@@ -166,6 +254,6 @@ struct
       Rresult.R.failwith_error_msg (Domain_name.of_string (Key_gen.host ()))
     in
     Stack.TCP.listen ~port:(Key_gen.port ()) (Stack.tcp stackv4v6)
-      (tcp_handler ~host pk db);
+      (tcp_handler ~host pk db ctx);
     Stack.listen stackv4v6
 end
