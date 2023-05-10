@@ -101,12 +101,9 @@ module Insertion = struct
            let cursor = Rp.Cursor.delete cursor in
            hook { state with cursor });
         `Handled
-    | `Arrow `Left, [] ->
+    | `Arrow (`Left | `Right as dir), [] ->
         let hook cursor = hook { state with cursor } in
-        Utils.move_cursor ~visual:false ~hook state.cursor `Left
-    | `Arrow `Right, [] ->
-        let hook cursor = hook { state with cursor } in
-        Utils.move_cursor ~visual:false ~hook state.cursor `Right
+        Utils.move_cursor ~visual:false ~hook state.cursor dir
     | `Arrow `Up, [] ->
         let cursor = History.move_backward state.history_message state.cursor in
         hook { state with cursor };
@@ -225,12 +222,9 @@ module Command = struct
            let cursor = Rp.Cursor.delete cursor in
            hook ~mode:(`Command cursor) state);
         `Handled
-    | `Arrow `Left, [] ->
+    | `Arrow (`Left | `Right as dir), [] ->
         let hook cursor = hook ~mode:(`Command cursor) state in
-        Utils.move_cursor ~visual:false ~hook cursor `Left
-    | `Arrow `Right, [] ->
-        let hook cursor = hook ~mode:(`Command cursor) state in
-        Utils.move_cursor ~visual:false ~hook cursor `Right
+        Utils.move_cursor ~visual:false ~hook cursor dir
     | `Arrow `Up, [] ->
         let cursor = History.move_backward state.history_command cursor in
         hook ~mode:(`Command cursor) state;
