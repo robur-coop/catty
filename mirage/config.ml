@@ -42,26 +42,24 @@ let catty =
   in
   foreign "Unikernel.Make"
     ~packages:
-      [
-        package ~pin:awa_pin "awa-mirage";
-        package ~pin:awa_pin "awa";
-        package "hxd" ~sublibs:[ "core"; "string" ];
-        package "catty";
-        package "rresult";
-        package "bigstringaf";
-        package "notty";
-        package ~pin:lwd_pin "nottui";
-        package ~pin:lwd_pin "lwd";
+      [ package ~pin:awa_pin "awa-mirage"
+      ; package ~pin:awa_pin "awa"
+      ; package "hxd" ~sublibs:[ "core"; "string" ]
+      ; package "catty"
+      ; package "rresult"
+      ; package "bigstringaf"
+      ; package "notty"
+      ; package ~pin:lwd_pin "nottui"
+      ; package ~pin:lwd_pin "lwd"
       ]
     ~keys:
-      [
-        Key.v port;
-        Key.v private_key;
-        Key.v users;
-        Key.v realname;
-        Key.v realname;
-        Key.v nicknames;
-        Key.v host;
+      [ Key.v port
+      ; Key.v private_key
+      ; Key.v users
+      ; Key.v realname
+      ; Key.v realname
+      ; Key.v nicknames
+      ; Key.v host
       ]
     (random @-> time @-> mclock @-> stackv4v6 @-> mimic @-> job)
 
@@ -72,7 +70,6 @@ let mimic = mimic_happy_eyeballs stackv4v6 dns happy_eyeballs
 
 let () =
   register "catty"
-    [
-      catty $ default_random $ default_time $ default_monotonic_clock
-      $ stackv4v6 $ mimic;
+    [ catty $ default_random $ default_time $ default_monotonic_clock
+      $ stackv4v6 $ mimic
     ]

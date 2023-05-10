@@ -1,8 +1,8 @@
-type state = {
-  env : (string, string) Hashtbl.t;
-  sigwinch : (int * int) Lwt_condition.t;
-  mutable size : int * int;
-}
+type state =
+  { env : (string, string) Hashtbl.t
+  ; sigwinch : (int * int) Lwt_condition.t
+  ; mutable size : int * int
+  }
 
 (* XXX(dinosaure): notable difference between `notty-{unix,lwt}` and `awa-ssh`:
    - The size (and the update of the size) is not given by a signal and a C call
@@ -128,10 +128,9 @@ struct
           (ui, cursor, quit, engine, go)
         in
         Lwt.join
-          [
-            Nottui'.run ~cursor ~quit (t.size, t.sigwinch) ui ic oc;
-            Catty.Engine.process engine;
-            action ();
+          [ Nottui'.run ~cursor ~quit (t.size, t.sigwinch) ui ic oc
+          ; Catty.Engine.process engine
+          ; action ()
           ]
         >>= fun () -> Lwt_switch.turn_off stop
     | SSH.Channel { cmd; _ } ->
@@ -142,10 +141,9 @@ struct
     let stop = Lwt_switch.create () in
     let server, msgs = Awa.Server.make pk db in
     let state =
-      {
-        env = Hashtbl.create 0x10;
-        sigwinch = Lwt_condition.create ();
-        size = (0, 0);
+      { env = Hashtbl.create 0x10
+      ; sigwinch = Lwt_condition.create ()
+      ; size = (0, 0)
       }
     in
     let* _t =
@@ -230,17 +228,15 @@ struct
     ctx
     |> Mimic.fold ~k:k0 tls_edn
          Mimic.Fun.
-           [
-             req Happy_eyeballs.happy_eyeballs;
-             req Catty.Engine.Connect.dst;
-             req Catty.Engine.Connect.tls;
+           [ req Happy_eyeballs.happy_eyeballs
+           ; req Catty.Engine.Connect.dst
+           ; req Catty.Engine.Connect.tls
            ]
     |> Mimic.fold ~k:k1 tcp_edn
          Mimic.Fun.
-           [
-             req Happy_eyeballs.happy_eyeballs;
-             req Catty.Engine.Connect.dst;
-             req Catty.Engine.Connect.tls;
+           [ req Happy_eyeballs.happy_eyeballs
+           ; req Catty.Engine.Connect.dst
+           ; req Catty.Engine.Connect.tls
            ]
 
   let start _random _time _mclock stackv4v6 ctx =
