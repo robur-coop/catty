@@ -117,7 +117,7 @@ let ctx =
     | Ok v -> v
     | Error (`Msg err) -> failwith err
   in
-  let to_sockaddr = function
+  let to_sockaddr : Catty.Address.t -> _ = function
     | `Domain (host, port) ->
         Logs.debug (fun m -> m "Resolving %a" Domain_name.pp host);
         let { Unix.h_addr_list; _ } =

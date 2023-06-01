@@ -23,6 +23,9 @@ and msg = Task.msg =
       { prefix : Cri.Protocol.prefix option; message : Cri.Protocol.message }
       -> msg
 
+let empty ~quit = { quit; servers = Set.empty }
+let server { server; _ } = server
+
 let add_server { quit; servers } ~stop ~thread ~send server tasks =
   let server = { stop; thread; send; tasks; server } in
   { quit; servers = Set.add server servers }
@@ -32,6 +35,7 @@ let servers { servers; _ } =
 
 let servers t = servers t |> Server.Set.of_list |> Server.to_map
 
+(*
 let stop_all_tasks tasks =
   let open Lwt.Infix in
   Lwt_list.fold_left_s
@@ -67,6 +71,7 @@ let replace_task :
       ([], []) (Set.elements servers)
   in
   Lwt.return ({ root with servers = Set.of_list servers }, msgs)
+*)
 
 let tasks_of_server ~on { servers; _ } =
   Log.debug (fun m ->
@@ -98,12 +103,6 @@ let add_task : on:Server.t -> Task.state * Task.msg list -> t -> t Lwt.t =
   in
   { root with servers = Set.of_list servers }
 
-let send ~on msgs { servers; _ } =
-  let f { send; server; _ } =
-    if Server.equal server on then send_msgs send msgs
-  in
-  List.iter f (Set.elements servers)
-
 let send_of_server ~on { servers; _ } =
   List.filter_map
     (fun { send; server; _ } ->
@@ -112,9 +111,6 @@ let send_of_server ~on { servers; _ } =
   |> function
   | [] -> None
   | x :: _ -> Some x
-
-let merge { servers = a; quit } { servers = b; _ } =
-  { quit; servers = Set.union a b }
 
 let stop { servers; _ } =
   let open Lwt.Infix in

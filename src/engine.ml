@@ -34,7 +34,7 @@ let make ~ctx ~now ~sleep ~host user =
     ; message
     ; action = (fun action -> pusha (Some action))
     ; do_quit
-    ; fibers = { quit; servers = Fiber.Set.empty }
+    ; fibers = Fiber.empty ~quit
     ; sleep
     ; now
     ; ctx
@@ -274,28 +274,21 @@ let process t =
 
   let rec go t =
     Lwt.pick [ on_message t; on_command t; on_recvs t ] >>= function
-    | `Yield -> go t
     | `Quit ->
         Log.debug (fun m -> m "Quit the engine");
         Lwt.return_unit
     | `Message (uid, v) -> Message.process t ~uid v >>= go
     | `Continue t -> Lwt.pause () >>= fun () -> go t
     | `Recv (on, msg) -> (
-        (* Fiber.process >|= Option'.iter? *)
-        Fiber.process ~on msg t.fibers
-        >>= function
-        | Some fibers ->
-            Log.debug (fun m -> m "Continue the process");
-            go { t with fibers }
-        | None ->
-            Log.debug (fun m -> m "No process are left");
-            Lwt.return_unit)
+        Fiber.process ~on msg t.fibers >>= function
+        | Some fibers -> go { t with fibers }
+        | None -> Lwt.return_unit)
     | `Delete server ->
         let { Fiber.servers; quit } = t.fibers in
         let servers =
           Fiber.Set.filter_map
-            (fun ({ server = server'; _ } as v) ->
-              if Server.equal server server' then None else Some v)
+            (fun v ->
+              if Server.equal server (Fiber.server v) then None else Some v)
             servers
         in
         go { t with fibers = { Fiber.servers; quit } }

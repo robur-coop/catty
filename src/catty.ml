@@ -8,3 +8,4 @@ module Message = Message
 module Uid = Uid
 module User = User
 module Action = Action
+module Address = Address
