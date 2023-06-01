@@ -35,4 +35,18 @@ let test02 =
     Rope.String.(rope_to_string (Cursor.to_rope cursor))
     "a"
 
-let () = Alcotest.run "rope" [ ("simple", [ test01; test02 ]) ]
+let test03 =
+  Alcotest.test_case "test03" `Quick @@ fun () ->
+  let module Rp = Rope.String in
+  let rec loop c = function
+    | 0 -> c
+    | n ->
+        let c = Rp.Cursor.insert_char c 'A' in
+        loop (Rp.Cursor.move_forward c 1) (pred n)
+  in
+
+  let c = loop (Rp.Cursor.create Rp.empty 0) 512 in
+  let r = Rp.Cursor.to_rope c in
+  Rp.iter_range ignore r 0 (Rp.length r)
+
+let () = Alcotest.run "rope" [ ("simple", [ test01; test02; test03 ]) ]
