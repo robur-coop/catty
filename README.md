@@ -10,7 +10,7 @@ The project is experimental.
 
 Currently, we provide also a simple binary which can be used as an IRC client:
 ```shell-session
-$ git clone https://github.com/roburio/catty.git
+$ git clone https://github.com/robur-coop/catty.git
 $ cd catty
 $ opam pin add -yn .
 $ opam install --deps-only catty
@@ -61,5 +61,5 @@ Currently, we use:
 ## GitHub mirror
 
 Currently, the GitHub repository is a mirror to
-https://git.robur.io/robur/catty. You can make a pull-request on GitHub or
-directly on https://git.robur.io/ if you want.
+https://git.robur.coop/robur/catty. You can make a pull-request on GitHub or
+directly on https://git.robur.coop/ if you want.
